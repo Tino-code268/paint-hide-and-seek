@@ -1,0 +1,210 @@
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { useEffect, useState, useCallback } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { supabase } from "@/integrations/supabase/client";
+
+export const Route = createFileRoute("/_authenticated/room/$code")({
+  component: Room,
+});
+
+type RoomRow = {
+  id: string;
+  code: string;
+  host_id: string;
+  status: "waiting" | "playing" | "finished";
+  map_name: string;
+  max_players: number;
+};
+
+type PlayerRow = {
+  id: string;
+  room_id: string;
+  user_id: string;
+  is_ready: boolean;
+  role: string | null;
+  joined_at: string;
+  username?: string;
+};
+
+function Room() {
+  const { code } = Route.useParams();
+  const { user } = Route.useRouteContext();
+  const navigate = useNavigate();
+
+  const [room, setRoom] = useState<RoomRow | null>(null);
+  const [players, setPlayers] = useState<PlayerRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadPlayers = useCallback(async (roomId: string) => {
+    const { data } = await supabase
+      .from("room_players")
+      .select("id, room_id, user_id, is_ready, role, joined_at")
+      .eq("room_id", roomId)
+      .order("joined_at", { ascending: true });
+    const rows = (data ?? []) as PlayerRow[];
+    if (rows.length) {
+      const ids = rows.map((r) => r.user_id);
+      const { data: profs } = await supabase.from("profiles").select("id, username").in("id", ids);
+      const map = new Map((profs ?? []).map((p) => [p.id, p.username]));
+      rows.forEach((r) => { r.username = map.get(r.user_id) ?? r.user_id.slice(0, 6); });
+    }
+    setPlayers(rows);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data: r, error } = await supabase.from("rooms").select("*").eq("code", code).maybeSingle();
+      if (cancelled) return;
+      if (error || !r) {
+        toast.error("방을 찾을 수 없습니다");
+        navigate({ to: "/lobby", replace: true });
+        return;
+      }
+      setRoom(r as RoomRow);
+      await loadPlayers(r.id);
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [code, navigate, loadPlayers]);
+
+  // Realtime subscription
+  useEffect(() => {
+    if (!room) return;
+    const channel = supabase
+      .channel(`room:${room.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "room_players", filter: `room_id=eq.${room.id}` },
+        () => { loadPlayers(room.id); })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rooms", filter: `id=eq.${room.id}` },
+        (payload) => { setRoom(payload.new as RoomRow); })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "rooms", filter: `id=eq.${room.id}` },
+        () => {
+          toast.info("방장이 방을 닫았습니다");
+          navigate({ to: "/lobby", replace: true });
+        })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [room, loadPlayers, navigate]);
+
+  // Navigate to game when status flips to playing
+  useEffect(() => {
+    if (room?.status === "playing") {
+      navigate({ to: "/game/$code", params: { code } });
+    }
+  }, [room?.status, code, navigate]);
+
+  if (loading || !room) {
+    return <div className="min-h-screen flex items-center justify-center text-muted-foreground">로딩 중...</div>;
+  }
+
+  const isHost = room.host_id === user.id;
+  const me = players.find((p) => p.user_id === user.id);
+  const allReady = players.length >= 2 && players.every((p) => p.is_ready);
+
+  const toggleReady = async () => {
+    if (!me) return;
+    await supabase.from("room_players").update({ is_ready: !me.is_ready }).eq("id", me.id);
+  };
+
+  const leaveRoom = async () => {
+    if (isHost) {
+      // Host leaving -> delete room (cascade removes players)
+      await supabase.from("rooms").delete().eq("id", room.id);
+    } else {
+      await supabase.from("room_players").delete().eq("id", me!.id);
+    }
+    navigate({ to: "/lobby", replace: true });
+  };
+
+  const startGame = async () => {
+    if (!isHost) return;
+    if (players.length < 2) return toast.error("최소 2명이 필요합니다");
+    if (!allReady) return toast.error("모든 플레이어가 준비되어야 합니다");
+
+    // Randomly pick seeker
+    const seekerIdx = Math.floor(Math.random() * players.length);
+    for (let i = 0; i < players.length; i++) {
+      await supabase.from("room_players")
+        .update({ role: i === seekerIdx ? "seeker" : "hider" })
+        .eq("id", players[i].id);
+    }
+    const { error } = await supabase.from("rooms")
+      .update({ status: "playing", started_at: new Date().toISOString() })
+      .eq("id", room.id);
+    if (error) toast.error("게임 시작 실패: " + error.message);
+  };
+
+  const copyCode = () => {
+    navigator.clipboard.writeText(code);
+    toast.success("코드가 복사되었습니다");
+  };
+
+  return (
+    <div className="min-h-screen">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-border/50">
+        <Link to="/lobby" className="font-bold tracking-widest text-primary text-glow">← 로비</Link>
+        <Button variant="outline" size="sm" onClick={leaveRoom}>
+          {isHost ? "방 닫기" : "방 나가기"}
+        </Button>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-6 py-10">
+        <div className="text-center mb-10">
+          <div className="text-xs text-muted-foreground uppercase tracking-widest">방 코드</div>
+          <button onClick={copyCode} className="mt-2 text-6xl font-mono tracking-[0.4em] text-primary text-glow hover:brightness-125 transition">
+            {code}
+          </button>
+          <div className="mt-2 text-xs text-muted-foreground">클릭해서 코드 복사</div>
+        </div>
+
+        <Card className="bg-card/70 border-border/60">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>대기실 · {players.length}/{room.max_players}</CardTitle>
+            {isHost && <Badge variant="outline" className="border-primary text-primary">방장</Badge>}
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y divide-border/50">
+              {players.map((p) => (
+                <li key={p.id} className="flex items-center justify-between py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center font-bold text-primary">
+                      {p.username?.[0]?.toUpperCase() ?? "?"}
+                    </div>
+                    <div>
+                      <div className="font-semibold">
+                        {p.username}
+                        {p.user_id === room.host_id && <span className="ml-2 text-xs text-primary">HOST</span>}
+                        {p.user_id === user.id && <span className="ml-2 text-xs text-muted-foreground">(나)</span>}
+                      </div>
+                    </div>
+                  </div>
+                  {p.is_ready
+                    ? <Badge className="bg-primary text-primary-foreground">READY</Badge>
+                    : <Badge variant="outline">대기중</Badge>}
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-6 flex flex-col md:flex-row gap-3">
+              <Button variant={me?.is_ready ? "outline" : "default"} onClick={toggleReady} className="flex-1 h-12 tracking-widest">
+                {me?.is_ready ? "준비 취소" : "준비 완료"}
+              </Button>
+              {isHost && (
+                <Button onClick={startGame} disabled={!allReady} className="flex-1 h-12 tracking-widest" variant="secondary">
+                  게임 시작 {!allReady && "(전원 준비 필요)"}
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <p className="mt-6 text-center text-xs text-muted-foreground">
+          최소 2명 · 게임이 시작되면 3D 화면으로 이동합니다
+        </p>
+      </main>
+    </div>
+  );
+}
