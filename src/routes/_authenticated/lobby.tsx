@@ -118,11 +118,23 @@ function Lobby() {
               <CardTitle>방 만들기</CardTitle>
               <CardDescription>새 방을 열고 6자리 코드를 친구들에게 공유합니다</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="map">맵 선택</Label>
+                <Select value={mapName} onValueChange={setMapName}>
+                  <SelectTrigger id="map"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {MAP_LIST.map((m) => (
+                      <SelectItem key={m.name} value={m.name}>{m.displayName}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <Button onClick={handleCreate} disabled={busy} className="w-full h-14 text-lg tracking-widest">
                 {busy ? "..." : "새 방 생성"}
               </Button>
             </CardContent>
+
           </Card>
 
           <Card className="bg-card/70 border-border/60">
