@@ -1,27 +1,43 @@
-## 문제
+## 2단계: 3D 씬 + 이동 + 실시간 위치 동기화
 
-방장 화면에서 나중에 참가한 플레이어가 목록에 나타나지 않음. 친구(뒤에 참가한 쪽)에서는 방장이 보임 — 자기 화면에서 `loadPlayers()`가 한 번 실행되기 때문. 방장 쪽은 참가 이후 발생한 `INSERT` 이벤트를 받아야 갱신되는데, Realtime 채널이 인증 토큰이 소켓에 반영되기 전에 subscribe되면 RLS 필터에 걸려 이벤트가 배달되지 않는 케이스입니다.
+### 패키지 설치
+- `three`, `@react-three/fiber`, `@react-three/drei`
 
-## 1단계 버그 수정 (`src/routes/_authenticated/room.$code.tsx`)
+### 맵 (`src/game/maps.ts`)
+3개 맵을 코드로 정의 (프로시저럴 박스/벽 구성, 각 맵 개성 있게):
+- `warehouse` — 넓은 창고, 컨테이너 상자 배치, 중앙 통로
+- `office` — 방 여러 개 + 복도 (벽 파티션으로 구획)
+- `arena` — 원형 경기장, 원기둥/장애물 클러스터
+각 맵: `{ name, floorSize, walls: [{pos,size,color}], props: [...], spawnPoints: [] }` 구조.
+방 만들 때 로비에 맵 선택 드롭다운 추가 → `rooms.map_name`에 저장.
 
-1. 채널 구독 전에 명시적으로 Realtime 인증 토큰 세팅:
-   - `const { data: { session } } = await supabase.auth.getSession();`
-   - `supabase.realtime.setAuth(session.access_token)`
-2. `.subscribe((status) => ...)` 콜백에서 상태 로깅하고, `CHANNEL_ERROR`/`TIMED_OUT`이면 재시도.
-3. 안전망으로 대기실 상태일 때 3초 간격 폴링(`setInterval`)을 두어 Realtime이 실패해도 목록이 최신화되도록. (게임 시작 후에는 clear)
-4. 방 참가 직후(로비 → 방 이동) 첫 렌더에서 `loadPlayers`가 한 번 확실히 실행되도록 유지.
+### 3D 씬 (`/game/$code`)
+`src/routes/_authenticated/game.$code.tsx` 를 R3F Canvas로 대체:
+- `<Canvas>` + `PointerLockControls` (1인칭)
+- 맵 지오메트리 렌더 (바닥, 벽, 프롭)
+- 로컬 플레이어: 카메라 = 눈 위치, 물리 없이 간단한 AABB 벽 충돌
+- 조작: WASD 이동, Shift 달리기, Space 점프(중력 시뮬), C 앉기(카메라 낮춤 + 이동속도↓)
+- 마우스 클릭으로 pointer lock 활성화, ESC로 해제
+- 상단 HUD: 방 코드, 내 역할(hider/seeker), 플레이어 수, "대기실로" 버튼
 
-## 검증
+### 다른 플레이어 동기화 (Broadcast)
+- `src/game/usePresence.ts` 훅
+- 채널: `supabase.channel(\`game:${roomId}\`, { config: { broadcast: { self: false } } })`
+- 로컬: 약 15Hz(66ms)로 `{userId, x,y,z, ry, crouch}` broadcast
+- 원격: 마지막 상태를 map으로 보관, 렌더에서 lerp 보간
+- 원격 플레이어: 캡슐 메시 + 이름 태그(`<Html>` from drei), 역할별 색상 (숨는 사람=시안, 술래=빨강, 자기 자신은 안 그림)
+- 언마운트 시 채널 정리
 
-Playwright로 두 세션(방장 + 참가자)을 띄워, 참가자가 조인한 뒤 방장 화면의 플레이어 목록에 참가자가 나타나는지 스크린샷으로 확인.
+### 시작/역할 로딩
+- 씬 마운트 시 `rooms` + `room_players` (내 role) fetch
+- `rooms.status !== "playing"`이면 대기실로 리다이렉트
+- 3D 좌표 스폰: `spawnPoints[playerIndex % n]`
 
-## 다음 단계 (2단계) — 버그 수정 후 이어서 진행
+### 로비 맵 선택
+- 방 만들기 카드에 select(warehouse/office/arena) 추가, `handleCreate`에 `map_name` 포함
 
-- React Three Fiber 설치 및 `/game/$code` 라우트에 3D 씬 구성
-- 3개 맵 중 하나 선택 (방 생성 시 map_name으로 저장된 값 사용) — MVP는 박스/벽으로 구성된 실내 맵 1개 먼저, 이후 2개 추가
-- WASD 이동 + 마우스 시점 회전 (PointerLockControls)
-- 점프/앉기
-- 다른 플레이어 위치 실시간 동기화: Supabase Realtime **Broadcast** 채널(초당 ~15회 위치 송신, DB 부하 방지)
-- 각 플레이어를 캡슐 메시로 표시, 역할별 색상
+### 검증
+Playwright로 로그인 → 방 만들기(맵 선택) → 게임 시작 → Canvas 렌더 및 pointer lock, HUD 표시 스크린샷 확인.
 
-3단계(숨는 시간/찾는 시간/총 발사/승패)는 2단계 완료 후 별도 계획으로.
+### 3단계 (다음)
+숨는 시간 120s / 찾는 시간 350s 타이머, 총 발사(레이캐스트), 탈락/관전, 승패 판정.

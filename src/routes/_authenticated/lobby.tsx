@@ -5,8 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { generateRoomCode } from "@/lib/auth-helpers";
+import { MAP_LIST } from "@/game/maps";
 
 export const Route = createFileRoute("/_authenticated/lobby")({
   component: Lobby,
@@ -19,6 +21,8 @@ function Lobby() {
   const [stats, setStats] = useState({ wins: 0, losses: 0 });
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mapName, setMapName] = useState<string>("warehouse");
+
 
   useEffect(() => {
     supabase.from("profiles").select("username, wins, losses").eq("id", user.id).maybeSingle()
@@ -40,10 +44,11 @@ function Lobby() {
         code = generateRoomCode();
         const { data, error } = await supabase
           .from("rooms")
-          .insert({ code, host_id: user.id })
+          .insert({ code, host_id: user.id, map_name: mapName })
           .select("id")
           .single();
         if (!error && data) { roomId = data.id; break; }
+
       }
       if (!roomId) throw new Error("방 생성 실패");
 
@@ -113,11 +118,23 @@ function Lobby() {
               <CardTitle>방 만들기</CardTitle>
               <CardDescription>새 방을 열고 6자리 코드를 친구들에게 공유합니다</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="map">맵 선택</Label>
+                <Select value={mapName} onValueChange={setMapName}>
+                  <SelectTrigger id="map"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {MAP_LIST.map((m) => (
+                      <SelectItem key={m.name} value={m.name}>{m.displayName}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <Button onClick={handleCreate} disabled={busy} className="w-full h-14 text-lg tracking-widest">
                 {busy ? "..." : "새 방 생성"}
               </Button>
             </CardContent>
+
           </Card>
 
           <Card className="bg-card/70 border-border/60">
