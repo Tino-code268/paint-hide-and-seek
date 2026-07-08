@@ -74,20 +74,45 @@ function Room() {
   // Realtime subscription
   useEffect(() => {
     if (!room) return;
-    const channel = supabase
-      .channel(`room:${room.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "room_players", filter: `room_id=eq.${room.id}` },
-        () => { loadPlayers(room.id); })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rooms", filter: `id=eq.${room.id}` },
-        (payload) => { setRoom(payload.new as RoomRow); })
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "rooms", filter: `id=eq.${room.id}` },
-        () => {
-          toast.info("방장이 방을 닫았습니다");
-          navigate({ to: "/lobby", replace: true });
-        })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [room, loadPlayers, navigate]);
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
+    (async () => {
+      // Ensure Realtime socket has the latest auth token so RLS lets postgres_changes through
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        await supabase.realtime.setAuth(session.access_token);
+      }
+      if (cancelled) return;
+
+      channel = supabase
+        .channel(`room:${room.id}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "room_players", filter: `room_id=eq.${room.id}` },
+          () => { loadPlayers(room.id); })
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rooms", filter: `id=eq.${room.id}` },
+          (payload) => { setRoom(payload.new as RoomRow); })
+        .on("postgres_changes", { event: "DELETE", schema: "public", table: "rooms", filter: `id=eq.${room.id}` },
+          () => {
+            toast.info("방장이 방을 닫았습니다");
+            navigate({ to: "/lobby", replace: true });
+          })
+        .subscribe((status) => {
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            console.warn("[room realtime] status:", status);
+          }
+        });
+    })();
+
+    // Polling fallback: refresh players every 3s while in waiting room
+    const poll = setInterval(() => { loadPlayers(room.id); }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [room?.id, loadPlayers, navigate, room]);
+
 
   // Navigate to game when status flips to playing
   useEffect(() => {
