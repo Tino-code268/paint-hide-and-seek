@@ -1,43 +1,78 @@
-## 2단계: 3D 씬 + 이동 + 실시간 위치 동기화
+# 3단계 계획: 바디 페인팅 + 테마 맵 + 캐릭터 리디자인
 
-### 패키지 설치
-- `three`, `@react-three/fiber`, `@react-three/drei`
+## 1. 캐릭터 리디자인 (흰색 스틱맨)
+참고 이미지의 화이트 스틱맨 스타일로 원격 플레이어 렌더링을 교체.
 
-### 맵 (`src/game/maps.ts`)
-3개 맵을 코드로 정의 (프로시저럴 박스/벽 구성, 각 맵 개성 있게):
-- `warehouse` — 넓은 창고, 컨테이너 상자 배치, 중앙 통로
-- `office` — 방 여러 개 + 복도 (벽 파티션으로 구획)
-- `arena` — 원형 경기장, 원기둥/장애물 클러스터
-각 맵: `{ name, floorSize, walls: [{pos,size,color}], props: [...], spawnPoints: [] }` 구조.
-방 만들 때 로비에 맵 선택 드롭다운 추가 → `rooms.map_name`에 저장.
+- `RemotePlayer` 컴포넌트를 캡슐 → 스틱맨 구조로 변경
+  - 머리: 흰색 구(sphere) + 검은 점 눈 2개, 웃는 입 (작은 torus 곡선)
+  - 몸통: 얇은 흰색 원기둥
+  - 팔/다리: 4개의 얇은 흰색 실린더, 걷기 애니메이션(위상 오프셋으로 좌우 진동)
+- 초기 색상은 **완전 흰색(#ffffff)**, 역할 표시는 이름표 테두리 색만 유지
+- 팔/다리는 이동 속도에 따라 살짝 스윙 (state.moving 플래그)
 
-### 3D 씬 (`/game/$code`)
-`src/routes/_authenticated/game.$code.tsx` 를 R3F Canvas로 대체:
-- `<Canvas>` + `PointerLockControls` (1인칭)
-- 맵 지오메트리 렌더 (바닥, 벽, 프롭)
-- 로컬 플레이어: 카메라 = 눈 위치, 물리 없이 간단한 AABB 벽 충돌
-- 조작: WASD 이동, Shift 달리기, Space 점프(중력 시뮬), C 앉기(카메라 낮춤 + 이동속도↓)
-- 마우스 클릭으로 pointer lock 활성화, ESC로 해제
-- 상단 HUD: 방 코드, 내 역할(hider/seeker), 플레이어 수, "대기실로" 버튼
+## 2. 바디 페인팅 시스템 (핵심 신규 기능)
+"몸에 그림을 그려 배경에 숨는" 메챠 카멜레온의 핵심 게임플레이.
 
-### 다른 플레이어 동기화 (Broadcast)
-- `src/game/usePresence.ts` 훅
-- 채널: `supabase.channel(\`game:${roomId}\`, { config: { broadcast: { self: false } } })`
-- 로컬: 약 15Hz(66ms)로 `{userId, x,y,z, ry, crouch}` broadcast
-- 원격: 마지막 상태를 map으로 보관, 렌더에서 lerp 보간
-- 원격 플레이어: 캡슐 메시 + 이름 태그(`<Html>` from drei), 역할별 색상 (숨는 사람=시안, 술래=빨강, 자기 자신은 안 그림)
-- 언마운트 시 채널 정리
+### 데이터 모델
+- `player_paint` 새 컬럼(Supabase `room_players`): `paint jsonb` — 획(stroke) 배열
+  - 각 stroke: `{ part: "head"|"torso"|"armL"|"armR"|"legL"|"legR", u, v, size, color }`
+  - u,v는 해당 부위 표면의 0~1 좌표
+- Realtime broadcast로 실시간 페인트 반영 (`paint_update` 이벤트)
 
-### 시작/역할 로딩
-- 씬 마운트 시 `rooms` + `room_players` (내 role) fetch
-- `rooms.status !== "playing"`이면 대기실로 리다이렉트
-- 3D 좌표 스폰: `spawnPoints[playerIndex % n]`
+### 페인팅 UI (숨는 시간 동안만 활성)
+- `P` 키로 페인트 모드 토글 → 3인칭 카메라로 전환 + 캔버스 오버레이
+- 좌측: 부위 선택(머리/몸통/왼팔/오른팔/왼다리/오른다리)
+- 상단: 색상 팔레트 + 브러시 크기 슬라이더 (자세한 그림 위해 크기 1~20px)
+- 중앙: 선택 부위의 전개도(2D 캔버스, 512×512) — 마우스로 자유롭게 그리기
+- 그린 결과가 3D 텍스처로 실시간 반영 (CanvasTexture)
+- 완료 후 `P` 다시 눌러 1인칭 복귀, DB에 stroke 저장
 
-### 로비 맵 선택
-- 방 만들기 카드에 select(warehouse/office/arena) 추가, `handleCreate`에 `map_name` 포함
+### 3D 반영
+- 각 부위 mesh의 `material.map = CanvasTexture(부위 캔버스)`
+- 원격 플레이어도 broadcast로 받은 stroke를 자기 캔버스에 재생성
 
-### 검증
-Playwright로 로그인 → 방 만들기(맵 선택) → 게임 시작 → Canvas 렌더 및 pointer lock, HUD 표시 스크린샷 확인.
+## 3. 맵 품질 향상 (밝고 넓고 테마)
+기존 3개 코드-정의 맵을 테마별 큰 맵으로 재작성.
 
-### 3단계 (다음)
-숨는 시간 120s / 찾는 시간 350s 타이머, 총 발사(레이캐스트), 탈락/관전, 승패 판정.
+### 조명 개편 (전 맵 공통)
+- `ambientLight` intensity 0.5 → 0.9
+- `hemisphereLight` 추가 (하늘/땅 색)
+- fog 원거리 30~90 → 60~180
+- 배경/맵별 밝은 컬러
+
+### 맵 3종
+1. **restaurant (레스토랑)** — 밝은 목재/화이트 톤, 80×80
+   - 테이블 여러 개(원형 상판 + 다리), 의자, 바 카운터, 주방(스토브·냉장고 박스), 벽화 아트월
+2. **market (야외 시장)** — 낮 시간, 100×100
+   - 노점 부스(색색 파라솔), 과일 상자 더미, 조명 등, 광장 분수(원기둥)
+3. **arcade (오락실)** — 네온이지만 전체적으로 밝게, 70×70
+   - 아케이드 캐비닛 열, 픽셀 아트월, 계산대, 뽑기 기계
+
+각 맵은 primitive(box/cylinder/sphere)만 조합하되 색상·배치로 테마감을 표현하고 walls 100+개로 밀도 높임. 스폰 포인트도 넓게 재배치.
+
+### 외부 에셋 옵션
+Three.js에 무거운 GLB 로더는 도입하지 않음(성능/번들 위험). 대신 primitive 조합 + 색/PBR-lite 재질로 "레스토랑처럼 보이게" 처리. 나중에 특정 맵 GLB가 필요하면 별도 요청 시 추가.
+
+## 4. 로비/방
+- 맵 드롭다운 옵션 갱신: restaurant / market / arcade
+- 기존 warehouse·office·arena는 제거(요청상 퀄리티 업 지시)
+
+## 5. 검증
+Playwright로 로그인 → 방 만들기(restaurant) → 게임 시작 → Canvas 렌더 스크린샷 + 페인팅 오버레이 진입 스크린샷 확인.
+
+---
+
+## 이 단계에서 제외 (다음 4단계 예정)
+- 숨는/찾는 시간 타이머
+- 총 발사(레이캐스트) 및 탈락/승패 판정
+- 관전 모드
+
+즉 이번은 **캐릭터+페인팅+맵 퀄리티**까지만.
+
+---
+
+## 기술 노트
+- `player_paint` 추가는 마이그레이션 필요 (GRANT 포함).
+- 페인트 broadcast는 stroke 단위(작음)로 throttled 20Hz.
+- CanvasTexture는 stroke 추가 시 `needsUpdate = true`.
+- 3인칭 전환 시 카메라는 캐릭터 뒤 3m, 위 1.5m offset.

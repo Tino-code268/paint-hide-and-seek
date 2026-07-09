@@ -21,7 +21,7 @@ function Lobby() {
   const [stats, setStats] = useState({ wins: 0, losses: 0 });
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [mapName, setMapName] = useState<string>("warehouse");
+  const [mapName, setMapName] = useState<string>("restaurant");
 
 
   useEffect(() => {
