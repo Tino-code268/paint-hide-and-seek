@@ -15,6 +15,7 @@ export type PlayerState = {
   moving: boolean;
   pose: number;      // 0 = normal, 1 = arms up, 2 = statue (frozen arms)
   caught: boolean;   // hit by the hunter → out
+  flat: boolean;     // pressed flat against a wall (Q)
   t: number;
 };
 
@@ -160,7 +161,7 @@ export function usePresence(
 
   const sendState = (
     x: number, y: number, z: number, ry: number,
-    crouch: boolean, moving: boolean, pose: number, caught: boolean,
+    crouch: boolean, moving: boolean, pose: number, caught: boolean, flat: boolean,
   ) => {
     const ch = channelRef.current;
     if (!ch) return;
@@ -171,7 +172,7 @@ export function usePresence(
       userId: selfUserId,
       username: selfMeta.username,
       role: selfMeta.role,
-      x, y, z, ry, crouch, moving, pose, caught,
+      x, y, z, ry, crouch, moving, pose, caught, flat,
       t: now,
     };
     ch.send({ type: "broadcast", event: "pos", payload }).catch(() => {});

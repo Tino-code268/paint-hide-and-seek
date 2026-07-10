@@ -17,7 +17,7 @@ import {
   createPaintCanvases, applyStroke, resetCanvases,
   type PaintCanvases, type PaintTextures,
 } from "@/game/bodyPaint";
-import { MAP_TEXTURES, loadTiledTexture } from "@/game/textures";
+import { getTex } from "@/game/textures";
 import { getControlScheme, type ControlScheme } from "@/game/controls";
 import { sfxShot, sfxHit, sfxWhistle, sfxPick, sfxFill, sfxDing } from "@/game/sfx";
 
@@ -98,12 +98,12 @@ function GameRoute() {
     return <div className="min-h-screen flex items-center justify-center text-muted-foreground">3D 로딩 중...</div>;
   }
 
-  const mapDef = MAPS[room.map_name] ?? MAPS.restaurant;
+  const mapDef = MAPS[room.map_name] ?? MAPS.house;
   return <GameScene room={room} mapDef={mapDef} me={me} selfUserId={user.id} />;
 }
 
 // -----------------------------------------------------------------------------
-// Phase (client-side timer) — meccha style: 10s ready / 120s hide / 400s seek
+// Phase — 10s ready / 120s hide / 400s seek, synced to the room's started_at
 // -----------------------------------------------------------------------------
 
 type Phase = "prep" | "hide" | "seek" | "end";
@@ -113,8 +113,6 @@ const PHASE_LABEL: Record<Phase, string> = {
   seek: "찾는 시간",
   end: "게임 종료",
 };
-// 10s ready → 120s hide → 400s seek. Derived from the room's started_at so
-// every player (and anyone who refreshes) sees the same synchronized clock.
 const PREP_END = 10, HIDE_END = 130, SEEK_END = 530;
 
 function computePhase(startedAt: number): { phase: Phase; remaining: number } {
@@ -165,7 +163,6 @@ function chainPlayerId(o: THREE.Object3D | null): string | null {
   return null;
 }
 
-// Sample the color of whatever the crosshair hits (texture pixel or material color)
 const imgCanvasCache = new WeakMap<object, CanvasRenderingContext2D>();
 
 function sampleHitColor(hit: THREE.Intersection): string | null {
@@ -176,14 +173,21 @@ function sampleHitColor(hit: THREE.Intersection): string | null {
   const img = map?.image as (HTMLImageElement | HTMLCanvasElement | undefined);
   if (map && img && img.width > 0 && hit.uv) {
     try {
-      let ctx = imgCanvasCache.get(img);
-      if (!ctx) {
-        const cv = document.createElement("canvas");
-        cv.width = img.width; cv.height = img.height;
-        ctx = cv.getContext("2d", { willReadFrequently: true })!;
-        ctx.drawImage(img, 0, 0);
-        imgCanvasCache.set(img, ctx);
+      let ctx: CanvasRenderingContext2D | null | undefined;
+      if (img instanceof HTMLCanvasElement) {
+        // live canvas (painted bodies, procedural textures) — sample directly, always fresh
+        ctx = img.getContext("2d");
+      } else {
+        ctx = imgCanvasCache.get(img);
+        if (!ctx) {
+          const cv = document.createElement("canvas");
+          cv.width = img.width; cv.height = img.height;
+          ctx = cv.getContext("2d", { willReadFrequently: true })!;
+          ctx.drawImage(img, 0, 0);
+          imgCanvasCache.set(img, ctx);
+        }
       }
+      if (!ctx) return mat.color ? "#" + mat.color.getHexString() : null;
       const u = (((hit.uv.x * map.repeat.x) % 1) + 1) % 1;
       const v = (((hit.uv.y * map.repeat.y) % 1) + 1) % 1;
       const px = Math.min(img.width - 1, Math.floor(u * img.width));
@@ -191,7 +195,7 @@ function sampleHitColor(hit: THREE.Intersection): string | null {
       const d = ctx.getImageData(px, py, 1, 1).data;
       return "#" + [d[0], d[1], d[2]].map((n) => n.toString(16).padStart(2, "0")).join("");
     } catch {
-      // canvas tainted by CORS — fall through to material color
+      // tainted canvas — fall through
     }
   }
   if (mat.color) return "#" + mat.color.getHexString();
@@ -213,6 +217,12 @@ export type TouchState = {
   pick: boolean; fill: boolean; whistle: boolean; stick: boolean; shoot: boolean;
 };
 
+export type SelfAnim = {
+  x: number; z: number; feetY: number; yaw: number;
+  crouch: boolean; moving: boolean; pose: number; flat: boolean;
+  visible: boolean;
+};
+
 function GameScene({
   room, mapDef, me, selfUserId,
 }: {
@@ -227,14 +237,31 @@ function GameScene({
   );
   const { phase, remaining, endNow } = useGamePhase(startedAtMs);
 
-  // shared live player position (for the paint-mode mascot)
-  const playerPosRef = useRef<THREE.Vector3 | null>(null);
+  const isSeeker = me.role === "seeker";
 
   const touchInput = useRef<TouchState>({
     mx: 0, mz: 0, lookX: 0, lookY: 0,
     jump: false, crouch: false,
     pick: false, fill: false, whistle: false, stick: false, shoot: false,
   });
+
+  const spawn = mapDef.spawnPoints[me.spawnIndex % mapDef.spawnPoints.length];
+
+  // live self pose for the visible third-person body
+  const selfAnim = useRef<SelfAnim>({
+    x: spawn[0], z: spawn[2], feetY: 0, yaw: 0,
+    crouch: false, moving: false, pose: 0, flat: false,
+    visible: !isSeeker,
+  });
+
+  // ---- toasts (on-screen feedback: 벽붙기, 포즈, 스포이드...) ----
+  const [toast, setToast] = useState<{ id: number; msg: string } | null>(null);
+  const toastSeq = useRef(0);
+  const showToast = useCallback((msg: string) => {
+    const id = ++toastSeq.current;
+    setToast({ id, msg });
+    setTimeout(() => setToast((t) => (t && t.id === id ? null : t)), 2000);
+  }, []);
 
   // ---- paint store ----
   const paintStoreRef = useRef<Map<string, { canvases: PaintCanvases; textures: PaintTextures; strokes: PaintStroke[] }>>(new Map());
@@ -329,7 +356,6 @@ function GameScene({
     return () => clearInterval(t);
   }, [me.role, selfUserId, remoteRef]);
 
-  // seeker catches everyone → game over early
   useEffect(() => {
     if (phase === "seek" && aliveInfo.total > 0 && aliveInfo.alive === 0 && !gameResult) {
       setGameResult("seeker");
@@ -337,32 +363,35 @@ function GameScene({
     }
   }, [phase, aliveInfo, gameResult, endNow]);
 
-  // timer ran out → survivors win
   useEffect(() => {
     if (phase === "end" && !gameResult) {
       setGameResult(aliveInfo.alive > 0 ? "hider" : "seeker");
     }
   }, [phase, gameResult, aliveInfo.alive]);
 
-  // free the mouse so the result screen buttons are clickable
   useEffect(() => {
     if (gameResult && document.pointerLockElement) document.exitPointerLock();
   }, [gameResult]);
 
-  const spawn = mapDef.spawnPoints[me.spawnIndex % mapDef.spawnPoints.length];
-
-  // P toggles paint mode
+  // P toggles paint mode (hiders only)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === "KeyP") { e.preventDefault(); setPaintMode((m) => !m); }
+      if (e.code === "KeyP" && !isSeeker) { e.preventDefault(); setPaintMode((m) => !m); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [isSeeker]);
 
   useEffect(() => {
     if (paintMode && document.pointerLockElement) document.exitPointerLock();
   }, [paintMode]);
+
+  // block the browser context menu (right-click = 회전 고정/회전)
+  useEffect(() => {
+    const onCtx = (e: MouseEvent) => e.preventDefault();
+    window.addEventListener("contextmenu", onCtx);
+    return () => window.removeEventListener("contextmenu", onCtx);
+  }, []);
 
   // ---- painting ----
   const [brushColor, setBrushColor] = useState("#e83a3a");
@@ -385,14 +414,13 @@ function GameScene({
     resetCanvases(entry.canvases, entry.textures);
   }, [getOrCreatePaint, selfUserId]);
 
-  // E — eyedropper picked a color
   const handleEyedrop = useCallback((color: string) => {
     setBodyColor(color);
     setBrushColor(color);
     sfxPick();
-  }, []);
+    showToast(`🎨 색 추출!`);
+  }, [showToast]);
 
-  // F — paint whole body with the picked color (meccha camouflage!)
   const fillSelf = useCallback(() => {
     const entry = getOrCreatePaint(selfUserId);
     const color = bodyColorRef.current;
@@ -405,14 +433,12 @@ function GameScene({
     sfxFill();
   }, [getOrCreatePaint, selfUserId, sendPaint]);
 
-  // 1 — whistle
   const handleSelfWhistle = useCallback(() => {
     if (myCaughtRef.current) return;
     sendWhistle();
     sfxWhistle();
   }, [sendWhistle]);
 
-  // seeker fired
   const handleFire = useCallback((rawTargets: string[], points: [number, number, number][]) => {
     const targets = rawTargets.filter((uid) => {
       if (uid === selfUserId) return false;
@@ -427,9 +453,7 @@ function GameScene({
   }, [selfUserId, remoteRef, applyShot, sendShot]);
 
   const isMobile = scheme === "mobile";
-  const isSeeker = me.role === "seeker";
 
-  // freeze rules: everyone in prep, seeker while hiders hide, everyone at end
   const frozen = phase === "prep" || (phase === "hide" && isSeeker) || phase === "end";
   const seekerBlind = isSeeker && (phase === "prep" || phase === "hide");
   const canShoot = isSeeker && phase === "seek" && !paintMode && gameResult === null;
@@ -443,9 +467,9 @@ function GameScene({
       >
         <color attach="background" args={[mapDef.skyColor]} />
         <fog attach="fog" args={[mapDef.skyColor, mapDef.fogNear, mapDef.fogFar]} />
-        <ambientLight intensity={0.85} color={mapDef.ambientColor} />
-        <hemisphereLight args={[mapDef.skyColor, mapDef.groundColor, 0.6]} />
-        <directionalLight position={[40, 60, 25]} intensity={1.2} castShadow
+        <ambientLight intensity={0.8} color={mapDef.ambientColor} />
+        <hemisphereLight args={[mapDef.skyColor, mapDef.groundColor, 0.55]} />
+        <directionalLight position={[40, 60, 25]} intensity={1.15} castShadow
           shadow-mapSize-width={2048} shadow-mapSize-height={2048}
           shadow-camera-left={-80} shadow-camera-right={80}
           shadow-camera-top={80} shadow-camera-bottom={-80}
@@ -465,11 +489,11 @@ function GameScene({
           whistlesRef={whistlesRef}
         />
 
-        {paintMode && (
-          <SelfMascot
-            spawn={spawn}
-            posRef={playerPosRef}
+        {!isSeeker && (
+          <SelfBody
+            selfAnim={selfAnim}
             textures={getOrCreatePaint(selfUserId).textures}
+            paintMode={paintMode}
             onPaint={applyLocalStroke}
           />
         )}
@@ -485,10 +509,12 @@ function GameScene({
           isMobile={isMobile}
           frozen={frozen}
           caught={myCaught}
+          isSeeker={isSeeker}
+          selfAnim={selfAnim}
           onEyedrop={handleEyedrop}
           onFill={fillSelf}
           onWhistle={handleSelfWhistle}
-          sharedPos={playerPosRef}
+          onToast={showToast}
         />
 
         <SeekerGun
@@ -519,7 +545,12 @@ function GameScene({
         isSeeker={isSeeker}
       />
 
-      {/* ===== overlays ===== */}
+      {toast && (
+        <div className="pointer-events-none fixed bottom-28 left-1/2 -translate-x-1/2 z-40 bg-black/75 text-white px-5 py-2 rounded-full text-sm font-bold tracking-wider border border-white/20 shadow-lg">
+          {toast.msg}
+        </div>
+      )}
+
       {phase === "prep" && (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/60">
           <div className="text-center">
@@ -530,7 +561,7 @@ function GameScene({
             <div className="mt-3 text-sm text-white/80 leading-relaxed">
               {isSeeker
                 ? <>카멜레온들이 숨는 120초 동안 기다렸다가<br/>좌클릭 샷건으로 전부 찾아내자!</>
-                : <>E로 주변 색을 추출하고 F로 몸을 칠해서<br/>배경에 완벽하게 녹아들자!</>}
+                : <>화면에 내 몸이 보여! E로 색을 추출하고 F로 칠해서<br/>배경에 완벽하게 녹아들자. Q로 벽에 붙을 수도 있어!</>}
             </div>
           </div>
         </div>
@@ -595,38 +626,39 @@ function GameScene({
 }
 
 // -----------------------------------------------------------------------------
-// Environment (textured)
+// Environment
 // -----------------------------------------------------------------------------
 
 function Floor({ mapDef }: { mapDef: MapDef }) {
   const [w, d] = mapDef.floorSize;
-  const texUrl = MAP_TEXTURES[mapDef.name]?.floor;
-  const tex = useMemo(() => texUrl ? loadTiledTexture(texUrl, Math.round(w / 4), Math.round(d / 4)) : null, [texUrl, w, d]);
+  const tex = useMemo(
+    () => mapDef.floorTex ? getTex(mapDef.floorTex, Math.round(w / 3.2), Math.round(d / 3.2)) : undefined,
+    [mapDef.floorTex, w, d],
+  );
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow userData={{ wallMesh: false }}>
+    <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
       <planeGeometry args={[w, d]} />
-      <meshStandardMaterial map={tex ?? undefined} color={tex ? "#ffffff" : mapDef.floorColor} roughness={0.85} />
+      <meshStandardMaterial map={tex} color={tex ? "#ffffff" : mapDef.floorColor} roughness={0.9} />
     </mesh>
   );
 }
 
 function Walls({ mapDef }: { mapDef: MapDef }) {
-  const texUrl = MAP_TEXTURES[mapDef.name]?.wall;
-  const wallTex = useMemo(() => texUrl ? loadTiledTexture(texUrl, 2, 2) : null, [texUrl]);
   return (
     <>
       {mapDef.walls.map((w, i) => {
-        // Only apply wall texture to the largest walls (outer/major partitions).
-        const [sx, , sz] = w.size;
-        const isBig = !w.noTex && Math.max(sx, sz) > 6;
+        const map = w.tex ? getTex(w.tex, w.texRepeat?.[0] ?? 1, w.texRepeat?.[1] ?? 1) : undefined;
         return (
           <mesh key={i} position={w.pos} castShadow={!w.noCollide} receiveShadow
             userData={{ wallMesh: !w.noCollide }}>
             <boxGeometry args={w.size} />
             <meshStandardMaterial
-              map={isBig ? wallTex ?? undefined : undefined}
-              color={isBig && wallTex ? "#ffffff" : (w.color ?? "#556677")}
-              roughness={0.8}
+              map={map}
+              color={map ? "#ffffff" : (w.color ?? "#8a8a92")}
+              roughness={0.85}
+              emissive={w.glow ? (map ? "#ffffff" : (w.color ?? "#ffffff")) : "#000000"}
+              emissiveMap={w.glow && map ? map : undefined}
+              emissiveIntensity={w.glow ? 0.7 : 0}
             />
           </mesh>
         );
@@ -674,7 +706,217 @@ function Splats({ splats }: { splats: Splat[] }) {
 }
 
 // -----------------------------------------------------------------------------
-// Local player + camera
+// The Meccha mannequin — one body used by yourself AND remote players
+// -----------------------------------------------------------------------------
+
+const POSE_NAMES = ["기본", "만세!", "조각상"];
+
+type BodySample = { moving: boolean; pose: number; crouch: boolean; flat: boolean };
+
+function PlayerBody({
+  textures, seeker, sample, paintFactory,
+}: {
+  textures: PaintTextures;
+  seeker: boolean;
+  sample: () => BodySample;
+  paintFactory?: (part: BodyPart) => {
+    onPointerDown: (e: ThreeEvent<PointerEvent>) => void;
+    onPointerMove: (e: ThreeEvent<PointerEvent>) => void;
+    onPointerUp: (e: ThreeEvent<PointerEvent>) => void;
+  };
+}) {
+  const inner = useRef<THREE.Group>(null);
+  const armLg = useRef<THREE.Group>(null);
+  const armRg = useRef<THREE.Group>(null);
+  const legLg = useRef<THREE.Group>(null);
+  const legRg = useRef<THREE.Group>(null);
+  const swing = useRef(0);
+
+  useFrame((_, dt) => {
+    const s = sample();
+    const g = inner.current;
+    if (!g) return;
+    const lerp = Math.min(1, dt * 10);
+    g.scale.y += (((s.crouch ? 0.72 : 1) - g.scale.y)) * lerp;
+    g.scale.z += (((s.flat ? 0.42 : 1) - g.scale.z)) * lerp;
+
+    const target = s.moving && s.pose === 0 ? 1 : 0;
+    swing.current += (target - swing.current) * Math.min(1, dt * 8);
+    const t = performance.now() * 0.008;
+    const amp = 0.65 * swing.current;
+
+    const aL = armLg.current, aR = armRg.current, lL = legLg.current, lR = legRg.current;
+    if (!aL || !aR || !lL || !lR) return;
+    if (s.pose === 1) {
+      // 만세!
+      aL.rotation.x += (0 - aL.rotation.x) * lerp;
+      aR.rotation.x += (0 - aR.rotation.x) * lerp;
+      aL.rotation.z += (2.7 - aL.rotation.z) * lerp;
+      aR.rotation.z += (-2.7 - aR.rotation.z) * lerp;
+      lL.rotation.x += (0 - lL.rotation.x) * lerp;
+      lR.rotation.x += (0 - lR.rotation.x) * lerp;
+    } else if (s.pose === 2) {
+      // 조각상 — 완전 정지
+      aL.rotation.x += (0 - aL.rotation.x) * lerp;
+      aR.rotation.x += (0 - aR.rotation.x) * lerp;
+      aL.rotation.z += (0.1 - aL.rotation.z) * lerp;
+      aR.rotation.z += (-0.1 - aR.rotation.z) * lerp;
+      lL.rotation.x += (0 - lL.rotation.x) * lerp;
+      lR.rotation.x += (0 - lR.rotation.x) * lerp;
+    } else {
+      aL.rotation.z += (0.12 - aL.rotation.z) * lerp;
+      aR.rotation.z += (-0.12 - aR.rotation.z) * lerp;
+      aL.rotation.x = Math.sin(t) * amp;
+      aR.rotation.x = -Math.sin(t) * amp;
+      lL.rotation.x = -Math.sin(t) * amp * 0.9;
+      lR.rotation.x = Math.sin(t) * amp * 0.9;
+    }
+  });
+
+  const h = (part: BodyPart) => paintFactory ? paintFactory(part) : {};
+
+  return (
+    <group ref={inner}>
+      {/* legs (pivot at hip) */}
+      <group ref={legLg} position={[-0.14, 0.86, 0]}>
+        <mesh position={[0, -0.4, 0]} castShadow {...h("legL")}>
+          <capsuleGeometry args={[0.115, 0.55, 6, 14]} />
+          <meshStandardMaterial map={textures.legL} color="#ffffff" roughness={0.55} />
+        </mesh>
+      </group>
+      <group ref={legRg} position={[0.14, 0.86, 0]}>
+        <mesh position={[0, -0.4, 0]} castShadow {...h("legR")}>
+          <capsuleGeometry args={[0.115, 0.55, 6, 14]} />
+          <meshStandardMaterial map={textures.legR} color="#ffffff" roughness={0.55} />
+        </mesh>
+      </group>
+      {/* torso — smooth egg */}
+      <mesh position={[0, 1.14, 0]} scale={[1, 1.28, 0.85]} castShadow {...h("torso")}>
+        <sphereGeometry args={[0.37, 26, 22]} />
+        <meshStandardMaterial map={textures.torso} color="#ffffff" roughness={0.55} />
+      </mesh>
+      {/* arms (pivot at shoulder) */}
+      <group ref={armLg} position={[-0.45, 1.46, 0]} rotation={[0, 0, 0.12]}>
+        <mesh position={[0, -0.32, 0]} castShadow {...h("armL")}>
+          <capsuleGeometry args={[0.095, 0.5, 6, 12]} />
+          <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={0.55} />
+        </mesh>
+      </group>
+      <group ref={armRg} position={[0.45, 1.46, 0]} rotation={[0, 0, -0.12]}>
+        <mesh position={[0, -0.32, 0]} castShadow {...h("armR")}>
+          <capsuleGeometry args={[0.095, 0.5, 6, 12]} />
+          <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={0.55} />
+        </mesh>
+        {/* hunters carry the paint shotgun in their right hand */}
+        {seeker && (
+          <group position={[0.02, -0.62, -0.25]}>
+            <mesh castShadow>
+              <boxGeometry args={[0.09, 0.11, 0.55]} />
+              <meshStandardMaterial color="#2a2a32" />
+            </mesh>
+            <mesh position={[0, 0.02, -0.42]}>
+              <boxGeometry args={[0.06, 0.06, 0.4]} />
+              <meshStandardMaterial color="#3a3a44" />
+            </mesh>
+            <mesh position={[0, 0.02, -0.64]}>
+              <boxGeometry args={[0.07, 0.07, 0.05]} />
+              <meshStandardMaterial color="#f4a83a" emissive="#f4a83a" emissiveIntensity={0.5} />
+            </mesh>
+          </group>
+        )}
+      </group>
+      {/* neck + head — smooth, faceless, pure white (paint it!) */}
+      <mesh position={[0, 1.62, 0]} castShadow>
+        <cylinderGeometry args={[0.09, 0.11, 0.14, 12]} />
+        <meshStandardMaterial map={textures.head} color="#ffffff" roughness={0.55} />
+      </mesh>
+      <mesh position={[0, 1.84, 0]} castShadow {...h("head")}>
+        <sphereGeometry args={[0.26, 26, 22]} />
+        <meshStandardMaterial map={textures.head} color="#ffffff" roughness={0.55} />
+      </mesh>
+    </group>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Your own visible body (third person) — also the paint target in paint mode
+// -----------------------------------------------------------------------------
+
+function SelfBody({
+  selfAnim, textures, paintMode, onPaint,
+}: {
+  selfAnim: React.MutableRefObject<SelfAnim>;
+  textures: PaintTextures;
+  paintMode: boolean;
+  onPaint: (part: BodyPart, x: number, y: number, from?: { x: number; y: number }) => void;
+}) {
+  const group = useRef<THREE.Group>(null);
+  const drawingRef = useRef(false);
+  const lastRef = useRef<Record<BodyPart, { x: number; y: number } | null>>({
+    head: null, torso: null, armL: null, armR: null, legL: null, legR: null,
+  });
+
+  useFrame(() => {
+    const a = selfAnim.current;
+    const g = group.current;
+    if (!g) return;
+    g.visible = a.visible;
+    g.position.set(a.x, a.feetY, a.z);
+    g.rotation.y = a.yaw;
+  });
+
+  useEffect(() => {
+    const up = () => { drawingRef.current = false; };
+    window.addEventListener("pointerup", up);
+    return () => window.removeEventListener("pointerup", up);
+  }, []);
+
+  const paintFactory = useCallback((part: BodyPart) => {
+    const handle = (e: ThreeEvent<PointerEvent>) => {
+      if (!e.uv) return;
+      const ne = e.nativeEvent;
+      // left button paints; right button is reserved for orbiting the camera
+      if (e.type === "pointerdown" && ne.button !== 0) return;
+      if (e.type === "pointermove" && (ne.buttons & 1) === 0) return;
+      e.stopPropagation();
+      if (e.type === "pointerdown") {
+        drawingRef.current = true;
+        lastRef.current[part] = null;
+      }
+      if (e.type === "pointerup" || e.type === "pointerleave") {
+        drawingRef.current = false;
+        lastRef.current[part] = null;
+        return;
+      }
+      if (e.type === "pointermove" && !drawingRef.current) return;
+      const x = e.uv.x * CANVAS_SIZE;
+      const y = (1 - e.uv.y) * CANVAS_SIZE;
+      const from = lastRef.current[part] ?? undefined;
+      onPaint(part, x, y, from);
+      lastRef.current[part] = { x, y };
+    };
+    return { onPointerDown: handle, onPointerMove: handle, onPointerUp: handle };
+  }, [onPaint]);
+
+  const sample = useCallback(() => {
+    const a = selfAnim.current;
+    return { moving: a.moving, pose: a.pose, crouch: a.crouch, flat: a.flat };
+  }, [selfAnim]);
+
+  return (
+    <group ref={group} userData={{ noRay: true }}>
+      <PlayerBody
+        textures={textures}
+        seeker={false}
+        sample={sample}
+        paintFactory={paintMode ? paintFactory : undefined}
+      />
+    </group>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Local player: physics + camera (3rd person for chameleons, 1st for the hunter)
 // -----------------------------------------------------------------------------
 
 const GRAVITY = -22;
@@ -682,23 +924,26 @@ const JUMP_V = 8;
 const WALK_SPEED = 5;
 const RUN_SPEED = 8;
 const CROUCH_SPEED = 2.4;
+const UP = new THREE.Vector3(0, 1, 0);
 
 function LocalPlayer({
   spawn, walls, props, floorSize, sendState, paintMode, touchInput, isMobile,
-  frozen, caught, onEyedrop, onFill, onWhistle, sharedPos,
+  frozen, caught, isSeeker, selfAnim, onEyedrop, onFill, onWhistle, onToast,
 }: {
   spawn: [number, number, number];
   walls: WallBox[]; props: Prop[]; floorSize: [number, number];
-  sendState: (x: number, y: number, z: number, ry: number, crouch: boolean, moving: boolean, pose: number, caught: boolean) => void;
+  sendState: (x: number, y: number, z: number, ry: number, crouch: boolean, moving: boolean, pose: number, caught: boolean, flat: boolean) => void;
   paintMode: boolean;
   touchInput: React.MutableRefObject<TouchState>;
   isMobile: boolean;
   frozen: boolean;
   caught: boolean;
+  isSeeker: boolean;
+  selfAnim: React.MutableRefObject<SelfAnim>;
   onEyedrop: (color: string) => void;
   onFill: () => void;
   onWhistle: () => void;
-  sharedPos: React.MutableRefObject<THREE.Vector3 | null>;
+  onToast: (msg: string) => void;
 }) {
   const { camera, scene } = useThree();
   const posRef = useRef(new THREE.Vector3(spawn[0], spawn[1], spawn[2]));
@@ -710,6 +955,8 @@ function LocalPlayer({
   const keys = useRef<Record<string, boolean>>({});
   const poseRef = useRef(0);
   const stuckRef = useRef(false);
+  const stuckYawRef = useRef(0);
+  const freezeYawRef = useRef<number | null>(null);
 
   const frozenRef = useRef(frozen);
   frozenRef.current = frozen;
@@ -718,7 +965,6 @@ function LocalPlayer({
   const paintModeRef = useRef(paintMode);
   paintModeRef.current = paintMode;
 
-  // Third-person camera anchor when in paint mode
   const paintAngle = useRef({ yaw: 0, dist: 3.2 });
 
   const colliders = useMemo(() => {
@@ -739,29 +985,42 @@ function LocalPlayer({
     camera.position.set(spawn[0], spawn[1], spawn[2]);
   }, [camera, spawn]);
 
-  useEffect(() => { sharedPos.current = posRef.current; }, [sharedPos]);
-
-  // Paint mode: right-drag to orbit around your body
+  // Paint mode: right-drag orbits around your body
   useEffect(() => {
     if (!paintMode) return;
     const onMove = (e: PointerEvent) => {
       if (e.buttons & 2) paintAngle.current.yaw += e.movementX * 0.008;
     };
-    const onCtx = (e: MouseEvent) => e.preventDefault();
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("contextmenu", onCtx);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("contextmenu", onCtx);
-    };
+    return () => window.removeEventListener("pointermove", onMove);
   }, [paintMode]);
 
-  // --- special actions (raycast-based) ---
+  // Right-click = rotation freeze (real meccha trick: body stays put while you look around)
+  useEffect(() => {
+    if (isSeeker) return;
+    const down = (e: MouseEvent) => {
+      if (e.button === 2 && !paintModeRef.current) {
+        freezeYawRef.current = stuckRef.current ? stuckYawRef.current : yawRef.current;
+      }
+    };
+    const up = (e: MouseEvent) => {
+      if (e.button === 2) freezeYawRef.current = null;
+    };
+    window.addEventListener("mousedown", down);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousedown", down);
+      window.removeEventListener("mouseup", up);
+    };
+  }, [isSeeker]);
+
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
 
   const eyedrop = useCallback(() => {
     if (caughtRef.current || paintModeRef.current) return;
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    raycaster.set(posRef.current, dir); // from the player's eyes, not the camera
     raycaster.far = 30;
     const hits = raycaster.intersectObjects(scene.children, true);
     for (const h of hits) {
@@ -772,12 +1031,19 @@ function LocalPlayer({
   }, [camera, scene, raycaster, onEyedrop]);
 
   const toggleStick = useCallback(() => {
-    if (frozenRef.current || paintModeRef.current) return;
-    if (stuckRef.current) { stuckRef.current = false; return; }
+    if (frozenRef.current || paintModeRef.current || caughtRef.current) return;
+    if (stuckRef.current) {
+      stuckRef.current = false;
+      onToast("벽에서 떨어졌다");
+      return;
+    }
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
-    raycaster.set(camera.position, dir);
-    raycaster.far = 2.4;
+    dir.y = 0;
+    if (dir.lengthSq() < 0.01) { onToast("벽을 정면으로 바라보고 Q!"); return; }
+    dir.normalize();
+    raycaster.set(posRef.current, dir);
+    raycaster.far = 3.0;
     const hits = raycaster.intersectObjects(scene.children, true);
     for (const h of hits) {
       if (chainHas(h.object, "noRay")) continue;
@@ -786,29 +1052,37 @@ function LocalPlayer({
         ? h.face.normal.clone().transformDirection(h.object.matrixWorld)
         : dir.clone().negate();
       n.y = 0;
-      if (n.lengthSq() < 0.01) continue; // floor/ceiling face — can't stick
+      if (n.lengthSq() < 0.01) continue;
       n.normalize();
       const p = posRef.current;
-      // press flat against the wall (just outside the collider so unsticking is safe)
       p.x = h.point.x + n.x * (PLAYER_RADIUS + 0.05);
       p.z = h.point.z + n.z * (PLAYER_RADIUS + 0.05);
       velY.current = 0;
       stuckRef.current = true;
+      stuckYawRef.current = Math.atan2(-n.x, -n.z); // back against the wall, facing the room
+      onToast("벽에 딱 붙었다! (Q 또는 Space로 떼기)");
       return;
     }
-  }, [camera, scene, raycaster]);
+    onToast("가까운 벽이 없어! 벽을 바라보고 Q");
+  }, [camera, scene, raycaster, onToast]);
 
-  const actionsRef = useRef({ eyedrop, toggleStick, onFill, onWhistle });
-  actionsRef.current = { eyedrop, toggleStick, onFill, onWhistle };
+  const cyclePose = useCallback(() => {
+    if (paintModeRef.current) return;
+    poseRef.current = (poseRef.current + 1) % 3;
+    onToast(`포즈: ${POSE_NAMES[poseRef.current]}`);
+  }, [onToast]);
+
+  const actionsRef = useRef({ eyedrop, toggleStick, onFill, onWhistle, cyclePose });
+  actionsRef.current = { eyedrop, toggleStick, onFill, onWhistle, cyclePose };
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       keys.current[e.code] = true;
-      if (e.repeat) return;
+      if (e.repeat || isSeeker) return;
       if (e.code === "KeyE") actionsRef.current.eyedrop();
       if (e.code === "KeyF" && !caughtRef.current && !paintModeRef.current) actionsRef.current.onFill();
       if (e.code === "KeyQ") actionsRef.current.toggleStick();
-      if (e.code === "KeyR") poseRef.current = (poseRef.current + 1) % 3;
+      if (e.code === "KeyR") actionsRef.current.cyclePose();
       if (e.code === "Digit1" && !caughtRef.current) actionsRef.current.onWhistle();
     };
     const up = (e: KeyboardEvent) => { keys.current[e.code] = false; };
@@ -818,20 +1092,54 @@ function LocalPlayer({
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, []);
+  }, [isSeeker]);
+
+  const camRay = useMemo(() => new THREE.Raycaster(), []);
+
+  const placeThirdPersonCamera = useCallback(() => {
+    const p = posRef.current;
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+    const right = new THREE.Vector3().crossVectors(camDir, UP).normalize();
+    const pivot = new THREE.Vector3(p.x, p.y + 0.35, p.z).addScaledVector(right, 0.45);
+    let dist = 3.6;
+    camRay.set(pivot, camDir.clone().negate());
+    camRay.far = dist;
+    const hits = camRay.intersectObjects(scene.children, true);
+    for (const h of hits) {
+      if (chainHas(h.object, "noRay")) continue;
+      if (!chainHas(h.object, "wallMesh")) continue;
+      dist = Math.max(0.7, h.distance - 0.25);
+      break;
+    }
+    camera.position.copy(pivot).addScaledVector(camDir, -dist);
+  }, [camera, scene, camRay]);
+
+  const syncSelfAnim = useCallback((moving: boolean, crouch: boolean, bodyYaw: number) => {
+    const p = posRef.current;
+    const a = selfAnim.current;
+    const eyeH = crouch ? PLAYER_CROUCH_HEIGHT : PLAYER_EYE_HEIGHT;
+    a.x = p.x; a.z = p.z;
+    a.feetY = Math.max(0, p.y - eyeH);
+    a.yaw = bodyYaw;
+    a.crouch = crouch;
+    a.moving = moving;
+    a.pose = poseRef.current;
+    a.flat = stuckRef.current;
+    a.visible = !isSeeker;
+  }, [selfAnim, isSeeker]);
 
   useFrame((_, dtRaw) => {
     const dt = Math.min(dtRaw, 0.05);
     const p = posRef.current;
     const ti = touchInput.current;
 
-    // mobile action buttons
     if (ti.pick) { ti.pick = false; actionsRef.current.eyedrop(); }
     if (ti.fill) { ti.fill = false; if (!caughtRef.current && !paintModeRef.current) actionsRef.current.onFill(); }
     if (ti.whistle) { ti.whistle = false; if (!caughtRef.current) actionsRef.current.onWhistle(); }
     if (ti.stick) { ti.stick = false; actionsRef.current.toggleStick(); }
 
-    // Paint mode: orbit camera around self, freeze locomotion.
+    // Paint mode: camera orbits your body
     if (paintMode) {
       const yaw = paintAngle.current.yaw;
       const dist = paintAngle.current.dist;
@@ -841,11 +1149,13 @@ function LocalPlayer({
         p.z + Math.cos(yaw) * dist,
       );
       camera.lookAt(p.x, p.y - 0.2, p.z);
-      sendState(p.x, p.y, p.z, yawRef.current, crouchRef.current, false, poseRef.current, caughtRef.current);
+      const bodyYaw = stuckRef.current ? stuckYawRef.current : yawRef.current;
+      syncSelfAnim(false, crouchRef.current, bodyYaw);
+      sendState(p.x, p.y, p.z, bodyYaw, crouchRef.current, false, poseRef.current, caughtRef.current, stuckRef.current);
       return;
     }
 
-    // Mobile look integration
+    // Mobile look
     if (isMobile) {
       yawRef.current -= ti.lookX;
       pitchRef.current = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, pitchRef.current - ti.lookY));
@@ -853,19 +1163,25 @@ function LocalPlayer({
       ti.lookY = 0;
       const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitchRef.current, yawRef.current, 0, "YXZ"));
       camera.quaternion.copy(q);
+    } else {
+      const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
+      yawRef.current = euler.y;
     }
 
     const k = keys.current;
 
-    // Wall stick: frozen in place, look allowed. Space breaks off.
+    // Wall stick: frozen flat against the wall; look around freely
     if (stuckRef.current) {
-      if (k["Space"] || ti.jump) { stuckRef.current = false; ti.jump = false; }
-      camera.position.copy(p);
-      if (!isMobile) {
-        const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
-        yawRef.current = euler.y;
+      if (k["Space"] || ti.jump) {
+        stuckRef.current = false;
+        ti.jump = false;
       }
-      sendState(p.x, p.y, p.z, yawRef.current, true, false, poseRef.current, caughtRef.current);
+      if (!isSeeker) placeThirdPersonCamera();
+      else camera.position.copy(p);
+      const bodyYaw = freezeYawRef.current ?? stuckYawRef.current;
+      // crouch=false so the flattened body stays on the floor (feetY = y - eye)
+      syncSelfAnim(false, false, bodyYaw);
+      sendState(p.x, p.y, p.z, bodyYaw, false, false, poseRef.current, caughtRef.current, true);
       return;
     }
 
@@ -875,7 +1191,7 @@ function LocalPlayer({
     const forward = new THREE.Vector3();
     camera.getWorldDirection(forward);
     forward.y = 0; forward.normalize();
-    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+    const right = new THREE.Vector3().crossVectors(forward, UP).normalize();
 
     const move = new THREE.Vector3();
     if (!frozen) {
@@ -892,11 +1208,8 @@ function LocalPlayer({
     if (moving) move.normalize();
 
     const speed = crouch ? CROUCH_SPEED : (k["ShiftLeft"] || k["ShiftRight"] ? RUN_SPEED : WALK_SPEED);
-    const dx = move.x * speed * dt;
-    const dz = move.z * speed * dt;
-
-    tryAxisMove(p, colliders, floorSize, dx, 0);
-    tryAxisMove(p, colliders, floorSize, 0, dz);
+    tryAxisMove(p, colliders, floorSize, move.x * speed * dt, 0);
+    tryAxisMove(p, colliders, floorSize, 0, move.z * speed * dt);
 
     if (!frozen && onGround.current && (k["Space"] || ti.jump)) {
       velY.current = JUMP_V;
@@ -906,13 +1219,13 @@ function LocalPlayer({
     velY.current += GRAVITY * dt;
     p.y += velY.current * dt;
     const eyeH = crouch ? PLAYER_CROUCH_HEIGHT : PLAYER_EYE_HEIGHT;
-    // stand on top of low objects (crates, tables, the stage...) — jump up there!
+    // stand on top of low furniture — jump onto crates, tables, the stage!
     let supportTop = 0;
     const feet = p.y - eyeH;
     for (const w of colliders) {
       const top = w.pos[1] + w.size[1] / 2;
-      if (top > 2.6 || top <= supportTop) continue;   // too tall / lower than current support
-      if (top > feet + 0.6) continue;                  // too high above our feet
+      if (top > 2.6 || top <= supportTop) continue;
+      if (top > feet + 0.6) continue;
       if (p.x < w.pos[0] - w.size[0] / 2 - 0.1 || p.x > w.pos[0] + w.size[0] / 2 + 0.1) continue;
       if (p.z < w.pos[2] - w.size[2] / 2 - 0.1 || p.z > w.pos[2] + w.size[2] / 2 + 0.1) continue;
       supportTop = top;
@@ -921,13 +1234,16 @@ function LocalPlayer({
     if (p.y <= groundY) { p.y = groundY; velY.current = 0; onGround.current = true; }
     else onGround.current = false;
 
-    camera.position.copy(p);
-
-    if (!isMobile) {
-      const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
-      yawRef.current = euler.y;
+    // camera
+    if (isSeeker) {
+      camera.position.copy(p);
+    } else {
+      placeThirdPersonCamera();
     }
-    sendState(p.x, p.y, p.z, yawRef.current, crouch, moving, poseRef.current, caughtRef.current);
+
+    const bodyYaw = freezeYawRef.current ?? yawRef.current;
+    syncSelfAnim(moving, crouch, bodyYaw);
+    sendState(p.x, p.y, p.z, bodyYaw, crouch, moving, poseRef.current, caughtRef.current, false);
   });
 
   return null;
@@ -945,8 +1261,7 @@ function tryAxisMove(p: THREE.Vector3, walls: WallBox[], floorSize: [number, num
   for (const w of walls) {
     const [wx, wy, wz] = w.pos; const [sx, sy, sz] = w.size;
     const minY = wy - sy / 2; const maxY = wy + sy / 2;
-    // objects whose top is near our feet don't block — we're standing on them
-    if (maxY < playerBottom + 0.5 || minY > playerTop) continue;
+    if (maxY < playerBottom + 0.5 || minY > playerTop) continue; // low tops are steppable
     const minX = wx - sx / 2 - r; const maxX = wx + sx / 2 + r;
     const minZ = wz - sz / 2 - r; const maxZ = wz + sz / 2 + r;
     if (cx > minX && cx < maxX && cz > minZ && cz < maxZ) return; // blocked
@@ -1010,7 +1325,7 @@ function SeekerGun({
   useEffect(() => {
     const onMouse = (e: MouseEvent) => {
       if (e.button !== 0) return;
-      if (!document.pointerLockElement) return; // only when aiming in-game
+      if (!document.pointerLockElement) return;
       fire();
     };
     window.addEventListener("mousedown", onMouse);
@@ -1033,27 +1348,22 @@ function SeekerGun({
   if (!visible) return null;
   return (
     <group ref={group} userData={{ noRay: true }}>
-      {/* stock + body */}
       <mesh position={[0.32, -0.3, -0.55]} raycast={() => null}>
         <boxGeometry args={[0.11, 0.13, 0.42]} />
         <meshStandardMaterial color="#2a2a32" />
       </mesh>
-      {/* barrel */}
       <mesh position={[0.32, -0.26, -0.95]} raycast={() => null}>
         <boxGeometry args={[0.07, 0.07, 0.55]} />
         <meshStandardMaterial color="#3a3a44" />
       </mesh>
-      {/* pump (paint tank) */}
       <mesh position={[0.32, -0.34, -0.8]} raycast={() => null}>
         <cylinderGeometry args={[0.05, 0.05, 0.2, 10]} />
         <meshStandardMaterial color="#e83a8a" />
       </mesh>
-      {/* orange tip */}
       <mesh position={[0.32, -0.26, -1.23]} raycast={() => null}>
         <boxGeometry args={[0.08, 0.08, 0.06]} />
         <meshStandardMaterial color="#f4a83a" emissive="#f4a83a" emissiveIntensity={0.5} />
       </mesh>
-      {/* muzzle flash */}
       <mesh ref={flashMesh} position={[0.32, -0.26, -1.35]} scale={0.001} raycast={() => null}>
         <sphereGeometry args={[0.22, 10, 10]} />
         <meshBasicMaterial color="#fff2a0" transparent opacity={0.9} />
@@ -1063,110 +1373,7 @@ function SeekerGun({
 }
 
 // -----------------------------------------------------------------------------
-// Self mascot (rendered only in paint mode) — supports in-world painting via raycast uv
-// -----------------------------------------------------------------------------
-
-function SelfMascot({
-  spawn, posRef, textures, onPaint,
-}: {
-  spawn: [number, number, number];
-  posRef: React.MutableRefObject<THREE.Vector3 | null>;
-  textures: PaintTextures;
-  onPaint: (part: BodyPart, x: number, y: number, from?: { x: number; y: number }) => void;
-}) {
-  const drawingRef = useRef(false);
-  const lastRef = useRef<Record<BodyPart, { x: number; y: number } | null>>({
-    head: null, torso: null, armL: null, armR: null, legL: null, legR: null,
-  });
-
-  const handlePointer = (part: BodyPart) => (e: ThreeEvent<PointerEvent>) => {
-    if (!e.uv) return;
-    e.stopPropagation();
-    if (e.type === "pointerdown") {
-      drawingRef.current = true;
-      lastRef.current[part] = null;
-    }
-    if (e.type === "pointerup" || e.type === "pointerleave") {
-      drawingRef.current = false;
-      lastRef.current[part] = null;
-      return;
-    }
-    if (e.type === "pointermove" && !drawingRef.current) return;
-    const x = e.uv.x * CANVAS_SIZE;
-    // flip Y for texture space
-    const y = (1 - e.uv.y) * CANVAS_SIZE;
-    const from = lastRef.current[part] ?? undefined;
-    onPaint(part, x, y, from);
-    lastRef.current[part] = { x, y };
-  };
-
-  useEffect(() => {
-    const up = () => { drawingRef.current = false; };
-    window.addEventListener("pointerup", up);
-    return () => window.removeEventListener("pointerup", up);
-  }, []);
-
-  // stand at the player's CURRENT position, not the spawn point
-  const x = posRef.current?.x ?? spawn[0];
-  const z = posRef.current?.z ?? spawn[2];
-  return (
-    <group position={[x, 0, z]}>
-      {/* Legs */}
-      <mesh position={[-0.18, 0.45, 0]} castShadow
-        onPointerDown={handlePointer("legL")} onPointerMove={handlePointer("legL")} onPointerUp={handlePointer("legL")}>
-        <cylinderGeometry args={[0.14, 0.14, 0.9, 16]} />
-        <meshStandardMaterial map={textures.legL} color="#ffffff" />
-      </mesh>
-      <mesh position={[0.18, 0.45, 0]} castShadow
-        onPointerDown={handlePointer("legR")} onPointerMove={handlePointer("legR")} onPointerUp={handlePointer("legR")}>
-        <cylinderGeometry args={[0.14, 0.14, 0.9, 16]} />
-        <meshStandardMaterial map={textures.legR} color="#ffffff" />
-      </mesh>
-      {/* Torso (chubby) */}
-      <mesh position={[0, 1.1, 0]} castShadow
-        onPointerDown={handlePointer("torso")} onPointerMove={handlePointer("torso")} onPointerUp={handlePointer("torso")}>
-        <sphereGeometry args={[0.42, 24, 20]} />
-        <meshStandardMaterial map={textures.torso} color="#ffffff" />
-      </mesh>
-      {/* Arms */}
-      <mesh position={[-0.45, 1.15, 0]} castShadow
-        onPointerDown={handlePointer("armL")} onPointerMove={handlePointer("armL")} onPointerUp={handlePointer("armL")}>
-        <cylinderGeometry args={[0.11, 0.11, 0.75, 14]} />
-        <meshStandardMaterial map={textures.armL} color="#ffffff" />
-      </mesh>
-      <mesh position={[0.45, 1.15, 0]} castShadow
-        onPointerDown={handlePointer("armR")} onPointerMove={handlePointer("armR")} onPointerUp={handlePointer("armR")}>
-        <cylinderGeometry args={[0.11, 0.11, 0.75, 14]} />
-        <meshStandardMaterial map={textures.armR} color="#ffffff" />
-      </mesh>
-      {/* Head */}
-      <mesh position={[0, 1.85, 0]} castShadow
-        onPointerDown={handlePointer("head")} onPointerMove={handlePointer("head")} onPointerUp={handlePointer("head")}>
-        <sphereGeometry args={[0.36, 28, 24]} />
-        <meshStandardMaterial map={textures.head} color="#ffffff" />
-      </mesh>
-      {/* Face */}
-      <FaceFeatures y={1.9} />
-    </group>
-  );
-}
-
-function FaceFeatures({ y }: { y: number }) {
-  return (
-    <group>
-      <mesh position={[-0.11, y, -0.33]}><sphereGeometry args={[0.035, 10, 10]} /><meshBasicMaterial color="#111" /></mesh>
-      <mesh position={[ 0.11, y, -0.33]}><sphereGeometry args={[0.035, 10, 10]} /><meshBasicMaterial color="#111" /></mesh>
-      {/* Smile — a small torus rotated to form a curve */}
-      <mesh position={[0, y - 0.11, -0.32]} rotation={[0, 0, 0]}>
-        <torusGeometry args={[0.09, 0.015, 8, 20, Math.PI]} />
-        <meshBasicMaterial color="#111" />
-      </mesh>
-    </group>
-  );
-}
-
-// -----------------------------------------------------------------------------
-// Remote mascots
+// Remote players
 // -----------------------------------------------------------------------------
 
 function RemotePlayersRenderer({
@@ -1187,7 +1394,7 @@ function RemotePlayersRenderer({
   void tick;
   const ids = Array.from(remoteRef.current.keys()).filter((id) => {
     if (id === selfUserId) return false;
-    if (caughtIds.has(id)) return false;               // caught → ghost, invisible
+    if (caughtIds.has(id)) return false;
     if (remoteRef.current.get(id)?.caught) return false;
     return true;
   });
@@ -1211,16 +1418,11 @@ function Mascot({
   whistlesRef: React.MutableRefObject<Record<string, number>>;
 }) {
   const group = useRef<THREE.Group>(null);
-  const armL = useRef<THREE.Mesh>(null);
-  const armR = useRef<THREE.Mesh>(null);
-  const legL = useRef<THREE.Mesh>(null);
-  const legR = useRef<THREE.Mesh>(null);
-  const swingRef = useRef(0);
   const state = remoteRef.current.get(userId);
   const { textures } = getPaint(userId);
   const isSeekerMascot = state?.role === "seeker";
   const nameColor = isSeekerMascot ? "#ff3860" : state?.role === "hider" ? "#3ad0ff" : "#a0a0a0";
-  // Hunters can't read chameleon nametags — that would ruin the camouflage!
+  // hunters can't read chameleon nametags
   const showName = isSeekerMascot || myRole !== "seeker";
   const whistledAt = whistlesRef.current[userId] ?? 0;
   const whistling = performance.now() - whistledAt < 2500;
@@ -1229,99 +1431,37 @@ function Mascot({
     const s = remoteRef.current.get(userId);
     if (!s || !group.current) return;
     const g = group.current;
-    const baseY = s.crouch ? 0.4 : 0.0;
+    const eyeH = s.crouch ? PLAYER_CROUCH_HEIGHT : PLAYER_EYE_HEIGHT;
+    const feetY = Math.max(0, s.y - eyeH);
     const lerp = 1 - Math.pow(0.001, dt);
     g.position.x += (s.x - g.position.x) * lerp;
-    g.position.y += (baseY - g.position.y) * lerp;
+    g.position.y += (feetY - g.position.y) * lerp;
     g.position.z += (s.z - g.position.z) * lerp;
     g.rotation.y = s.ry;
-    const target = s.moving ? 1 : 0;
-    swingRef.current += ((target - swingRef.current) * Math.min(1, dt * 8));
-    const t = performance.now() * 0.008;
-    const amp = 0.6 * swingRef.current;
-    const pose = s.pose ?? 0;
-    if (pose === 1) {
-      // arms up! (만세)
-      if (armL.current) { armL.current.rotation.x = 0; armL.current.rotation.z = 2.6; }
-      if (armR.current) { armR.current.rotation.x = 0; armR.current.rotation.z = -2.6; }
-      if (legL.current) legL.current.rotation.x = 0;
-      if (legR.current) legR.current.rotation.x = 0;
-    } else if (pose === 2) {
-      // statue pose — perfectly still
-      if (armL.current) { armL.current.rotation.x = 0; armL.current.rotation.z = 0.15; }
-      if (armR.current) { armR.current.rotation.x = 0; armR.current.rotation.z = -0.15; }
-      if (legL.current) legL.current.rotation.x = 0;
-      if (legR.current) legR.current.rotation.x = 0;
-    } else {
-      if (armL.current) { armL.current.rotation.z = 0; armL.current.rotation.x =  Math.sin(t) * amp; }
-      if (armR.current) { armR.current.rotation.z = 0; armR.current.rotation.x = -Math.sin(t) * amp; }
-      if (legL.current) legL.current.rotation.x = -Math.sin(t) * amp;
-      if (legR.current) legR.current.rotation.x =  Math.sin(t) * amp;
-    }
   });
 
+  const sample = useCallback(() => {
+    const s = remoteRef.current.get(userId);
+    return {
+      moving: !!s?.moving,
+      pose: s?.pose ?? 0,
+      crouch: !!s?.crouch,
+      flat: !!s?.flat,
+    };
+  }, [remoteRef, userId]);
+
   const initial = state ? [state.x, 0, state.z] as [number, number, number] : [0, 0, 0] as [number, number, number];
-  // hunters are bigger, like in the real game
   const scale = isSeekerMascot ? 1.25 : 1;
   return (
     <group ref={group} position={initial} scale={scale} userData={{ playerId: userId }}>
-      <group position={[-0.18, 0.45, 0]}>
-        <mesh ref={legL} castShadow>
-          <cylinderGeometry args={[0.14, 0.14, 0.9, 16]} />
-          <meshStandardMaterial map={textures.legL} color="#ffffff" />
-        </mesh>
-      </group>
-      <group position={[0.18, 0.45, 0]}>
-        <mesh ref={legR} castShadow>
-          <cylinderGeometry args={[0.14, 0.14, 0.9, 16]} />
-          <meshStandardMaterial map={textures.legR} color="#ffffff" />
-        </mesh>
-      </group>
-      <mesh position={[0, 1.1, 0]} castShadow>
-        <sphereGeometry args={[0.42, 24, 20]} />
-        <meshStandardMaterial map={textures.torso} color="#ffffff" />
-      </mesh>
-      <group position={[-0.45, 1.15, 0]}>
-        <mesh ref={armL} castShadow>
-          <cylinderGeometry args={[0.11, 0.11, 0.75, 14]} />
-          <meshStandardMaterial map={textures.armL} color="#ffffff" />
-        </mesh>
-      </group>
-      <group position={[0.45, 1.15, 0]}>
-        <mesh ref={armR} castShadow>
-          <cylinderGeometry args={[0.11, 0.11, 0.75, 14]} />
-          <meshStandardMaterial map={textures.armR} color="#ffffff" />
-        </mesh>
-      </group>
-      <mesh position={[0, 1.85, 0]} castShadow>
-        <sphereGeometry args={[0.36, 28, 24]} />
-        <meshStandardMaterial map={textures.head} color="#ffffff" />
-      </mesh>
-      <FaceFeatures y={1.9} />
-      {/* hunters carry their paint shotgun */}
-      {isSeekerMascot && (
-        <group position={[0.5, 1.05, -0.35]} rotation={[0, 0.15, 0]}>
-          <mesh castShadow>
-            <boxGeometry args={[0.1, 0.12, 0.7]} />
-            <meshStandardMaterial color="#2a2a32" />
-          </mesh>
-          <mesh position={[0, 0.02, -0.5]}>
-            <boxGeometry args={[0.06, 0.06, 0.4]} />
-            <meshStandardMaterial color="#3a3a44" />
-          </mesh>
-          <mesh position={[0, 0.02, -0.72]}>
-            <boxGeometry args={[0.07, 0.07, 0.05]} />
-            <meshStandardMaterial color="#f4a83a" emissive="#f4a83a" emissiveIntensity={0.5} />
-          </mesh>
-        </group>
-      )}
+      <PlayerBody textures={textures} seeker={!!isSeekerMascot} sample={sample} />
       {whistling && (
-        <Html position={[0, 2.9, 0]} center distanceFactor={12}>
+        <Html position={[0, 2.6, 0]} center distanceFactor={12}>
           <div style={{ fontSize: 28, pointerEvents: "none" }}>🎵</div>
         </Html>
       )}
       {showName && (
-        <Html position={[0, 2.4, 0]} center distanceFactor={10}>
+        <Html position={[0, 2.25, 0]} center distanceFactor={10}>
           <div className="px-2 py-0.5 text-xs font-mono rounded" style={{
             background: "rgba(0,0,0,0.65)", color: nameColor, border: `1px solid ${nameColor}`,
             whiteSpace: "nowrap", pointerEvents: "none",
@@ -1333,7 +1473,7 @@ function Mascot({
 }
 
 // -----------------------------------------------------------------------------
-// Paint toolbar (compact, non-blocking)
+// Paint toolbar
 // -----------------------------------------------------------------------------
 
 const PALETTE = [
@@ -1393,14 +1533,12 @@ function Hud({
 
   return (
     <>
-      {/* Top-left: room info */}
       <div className="pointer-events-none fixed top-3 left-3 z-30 flex items-center gap-3 bg-black/50 backdrop-blur px-3 py-2 rounded border border-white/10 text-white text-xs font-mono">
         <div><div className="text-[10px] uppercase tracking-widest text-white/50">Room</div><div className="text-primary">{code}</div></div>
         <div><div className="text-[10px] uppercase tracking-widest text-white/50">Player</div><div>{username}</div></div>
         <div><div className="text-[10px] uppercase tracking-widest text-white/50">Role</div><div className={roleColor}>{roleLabel}</div></div>
       </div>
 
-      {/* Top-center: phase timer */}
       <div className="pointer-events-none fixed top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center">
         <div className={`text-5xl font-black tabular-nums drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] ${phaseColor}`}>
           {mm}:{ss}
@@ -1410,7 +1548,6 @@ function Hud({
         </div>
       </div>
 
-      {/* Top-right: back + scheme toggle */}
       <div className="pointer-events-auto fixed top-3 right-3 z-30 flex items-center gap-2">
         <div className="flex bg-black/50 backdrop-blur border border-white/10 rounded overflow-hidden text-xs">
           <button onClick={() => onSchemeChange("pc")} className={`px-2 py-1 ${scheme === "pc" ? "bg-white text-black" : "text-white/70"}`}>PC</button>
@@ -1419,7 +1556,6 @@ function Hud({
         <Link to="/room/$code" params={{ code }}><Button size="sm" variant="outline">대기실</Button></Link>
       </div>
 
-      {/* Bottom-left: current camouflage color */}
       {!isSeeker && (
         <div className="pointer-events-none fixed bottom-4 left-4 z-30 flex items-center gap-2 bg-black/50 backdrop-blur px-3 py-2 rounded border border-white/10">
           <div className="w-8 h-8 rounded-full border-2 border-white/60" style={{ background: bodyColor }} />
@@ -1430,7 +1566,6 @@ function Hud({
         </div>
       )}
 
-      {/* Bottom-right: alive chameleon count */}
       <div className="pointer-events-none fixed bottom-4 right-4 z-30 text-white text-right">
         <div className="text-xs uppercase tracking-widest text-white/60">남은 카멜레온</div>
         <div className="text-5xl font-black leading-none drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
@@ -1438,7 +1573,6 @@ function Hud({
         </div>
       </div>
 
-      {/* Crosshair */}
       {!paintMode && (
         <div className="pointer-events-none fixed inset-0 flex items-center justify-center">
           {isSeeker
@@ -1449,16 +1583,18 @@ function Hud({
         </div>
       )}
 
-      {/* Click-to-start */}
       {!locked && !paintMode && scheme === "pc" && (
         <div className="pointer-events-none fixed inset-0 flex items-center justify-center">
           <div className="bg-black/70 backdrop-blur px-6 py-4 rounded border border-white/10 text-center text-white">
             <div className="text-lg font-bold tracking-widest">클릭해서 시작</div>
             <div className="mt-2 text-xs text-white/70 leading-relaxed">
               WASD 이동 · Shift 달리기 · Space 점프 · C 앉기<br/>
-              <span className="text-[#3ad0ff]">E</span> 색 추출 · <span className="text-[#3ad0ff]">F</span> 몸 전체 칠하기 · <span className="text-[#3ad0ff]">P</span> 정밀 그리기<br/>
-              <span className="text-[#f4ec3a]">Q</span> 벽에 붙기 · <span className="text-[#f4ec3a]">R</span> 포즈 변경 · <span className="text-[#f4ec3a]">1</span> 휘파람<br/>
-              {isSeeker && <span className="text-[#ff3860]">좌클릭 — 페인트 샷건 발사!</span>}
+              {isSeeker
+                ? <span className="text-[#ff3860]">좌클릭 — 페인트 샷건 발사!</span>
+                : <>
+                    <span className="text-[#3ad0ff]">E</span> 색 추출 · <span className="text-[#3ad0ff]">F</span> 몸 전체 칠하기 · <span className="text-[#3ad0ff]">P</span> 정밀 그리기<br/>
+                    <span className="text-[#f4ec3a]">Q</span> 벽에 붙기 · <span className="text-[#f4ec3a]">R</span> 포즈 · <span className="text-[#f4ec3a]">우클릭(꾹)</span> 몸 회전 고정 · <span className="text-[#f4ec3a]">1</span> 휘파람
+                  </>}
             </div>
           </div>
         </div>
@@ -1491,7 +1627,6 @@ function TouchControls({
 
     const onDown = (e: TouchEvent) => {
       for (const t of Array.from(e.changedTouches)) {
-        // touches that start on an action button must not become look-drags
         const el = t.target as HTMLElement | null;
         if (el && typeof el.closest === "function" && el.closest("button")) continue;
         const rect = stick.getBoundingClientRect();
@@ -1552,11 +1687,9 @@ function TouchControls({
 
   return (
     <>
-      {/* Joystick */}
       <div ref={stickRef} className="fixed bottom-6 left-6 z-30 w-32 h-32 rounded-full bg-white/10 border border-white/30 backdrop-blur touch-none">
         <div ref={knobRef} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-full bg-white/70 border border-white/50 shadow" />
       </div>
-      {/* Right buttons */}
       <div className="fixed bottom-6 right-6 z-30 flex flex-col gap-2 items-end">
         {isSeeker ? (
           <button onClick={() => { touchInput.current.shoot = true; }}

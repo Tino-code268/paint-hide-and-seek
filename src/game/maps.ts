@@ -1,5 +1,5 @@
-// Map definitions for Mecha Chameleon
-// Big, detailed maps with lots of hiding spots and colorful surfaces to mimic.
+// Map definitions for Mecha Chameleon v2
+// Fully furnished interiors built from a reusable furniture kit + procedural textures.
 
 export type Vec3 = [number, number, number];
 
@@ -7,8 +7,11 @@ export type WallBox = {
   pos: Vec3;
   size: Vec3;
   color?: string;
-  noTex?: boolean;     // never apply the big-wall texture (rugs, posters, ceiling...)
-  noCollide?: boolean; // visual only (rugs, posters, signs)
+  tex?: string;                 // procedural texture name (see textures.ts)
+  texRepeat?: [number, number];
+  glow?: boolean;               // emissive (screens, neon, lamps)
+  noTex?: boolean;              // never receive the map's default wall texture
+  noCollide?: boolean;          // visual only (rugs, posters, panels, ceiling)
 };
 
 export type PropCylinder = {
@@ -37,6 +40,7 @@ export type MapDef = {
   name: string;
   displayName: string;
   floorSize: [number, number];
+  floorTex?: string;
   floorColor: string;
   wallColor: string;
   ambientColor: string;
@@ -44,448 +48,650 @@ export type MapDef = {
   groundColor: string;
   fogNear: number;
   fogFar: number;
-  walls: WallBox[];   // AABB colliders + boxes
-  props: Prop[];      // decorative + optional colliders
+  walls: WallBox[];
+  props: Prop[];
   spawnPoints: Vec3[];
 };
 
 const PLAYER_EYE = 1.6;
 
-function outerWalls(w: number, d: number, h = 6, color = "#d8d0c4"): WallBox[] {
+// =============================================================================
+// Furniture / interior kit
+// =============================================================================
+
+function outerWalls(walls: WallBox[], w: number, d: number, h: number, color: string) {
   const t = 0.8;
-  return [
-    { pos: [0, h / 2, -d / 2], size: [w, h, t], color },
-    { pos: [0, h / 2,  d / 2], size: [w, h, t], color },
-    { pos: [-w / 2, h / 2, 0], size: [t, h, d], color },
-    { pos: [ w / 2, h / 2, 0], size: [t, h, d], color },
-  ];
+  walls.push(
+    { pos: [0, h / 2, -d / 2], size: [w, h, t], color, noTex: true },
+    { pos: [0, h / 2,  d / 2], size: [w, h, t], color, noTex: true },
+    { pos: [-w / 2, h / 2, 0], size: [t, h, d], color, noTex: true },
+    { pos: [ w / 2, h / 2, 0], size: [t, h, d], color, noTex: true },
+  );
 }
 
-// A poster / painting stuck slightly in front of a wall — great to mimic!
-function posterOnWall(
-  walls: WallBox[],
-  side: "N" | "S" | "E" | "W",
-  half: number, // half of the room on that axis
-  along: number, y: number, w: number, h: number, color: string,
+function ceiling(walls: WallBox[], w: number, d: number, h: number, color: string) {
+  walls.push({ pos: [0, h, 0], size: [w, 0.3, d], color, noTex: true, noCollide: true });
+}
+
+/** Wallpaper panel hugging the inside of a wall. side: which outer wall. */
+function wallPanel(
+  walls: WallBox[], side: "N" | "S" | "E" | "W",
+  half: number, center: number, length: number, h: number, tex: string,
 ) {
-  const t = 0.06;
-  const off = 0.5; // outer wall half-thickness + a bit
-  if (side === "N") walls.push({ pos: [along, y, -half + off], size: [w, h, t], color, noTex: true, noCollide: true });
-  if (side === "S") walls.push({ pos: [along, y,  half - off], size: [w, h, t], color, noTex: true, noCollide: true });
-  if (side === "W") walls.push({ pos: [-half + off, y, along], size: [t, h, w], color, noTex: true, noCollide: true });
-  if (side === "E") walls.push({ pos: [ half - off, y, along], size: [t, h, w], color, noTex: true, noCollide: true });
+  const t = 0.12, off = 0.47, y = h / 2;
+  const rep: [number, number] = [Math.max(1, Math.round(length / 4)), Math.max(1, Math.round(h / 4))];
+  if (side === "N") walls.push({ pos: [center, y, -half + off], size: [length, h, t], tex, texRepeat: rep, noCollide: true });
+  if (side === "S") walls.push({ pos: [center, y,  half - off], size: [length, h, t], tex, texRepeat: rep, noCollide: true });
+  if (side === "W") walls.push({ pos: [-half + off, y, center], size: [t, h, length], tex, texRepeat: rep, noCollide: true });
+  if (side === "E") walls.push({ pos: [ half - off, y, center], size: [t, h, length], tex, texRepeat: rep, noCollide: true });
+}
+
+/** Interior partition wall along an axis, with baseboard. */
+function partition(walls: WallBox[], pos: Vec3, size: Vec3, tex?: string, color = "#e8e0d0") {
+  const rep: [number, number] = [Math.max(1, Math.round(Math.max(size[0], size[2]) / 4)), Math.max(1, Math.round(size[1] / 4))];
+  walls.push({ pos, size, color, tex, texRepeat: tex ? rep : undefined, noTex: !tex });
+  walls.push({
+    pos: [pos[0], 0.15, pos[2]],
+    size: [size[0] + 0.06, 0.3, size[2] + 0.06],
+    color: "#5a4632", noTex: true,
+  });
+}
+
+/** Floor overlay (different flooring per room). */
+function floorArea(walls: WallBox[], x: number, z: number, w: number, d: number, tex: string) {
+  walls.push({
+    pos: [x, 0.03, z], size: [w, 0.06, d],
+    tex, texRepeat: [Math.max(1, Math.round(w / 3.2)), Math.max(1, Math.round(d / 3.2))],
+    noCollide: true,
+  });
 }
 
 function rug(walls: WallBox[], x: number, z: number, w: number, d: number, color: string) {
-  walls.push({ pos: [x, 0.03, z], size: [w, 0.06, d], color, noTex: true, noCollide: true });
+  walls.push({ pos: [x, 0.07, z], size: [w, 0.05, d], color, noTex: true, noCollide: true });
+  walls.push({ pos: [x, 0.06, z], size: [w + 0.5, 0.05, d + 0.5], color: "#3a3230", noTex: true, noCollide: true });
 }
 
-// Simple statue: pedestal + body + head. A classic thing to imitate!
-function statue(walls: WallBox[], props: Prop[], x: number, z: number, color = "#cfcfd6") {
-  walls.push({ pos: [x, 0.35, z], size: [1.4, 0.7, 1.4], color: "#9a9aa2" });
-  props.push({ kind: "cylinder", pos: [x, 1.35, z], radiusTop: 0.28, radiusBottom: 0.4, height: 1.3, color, collides: true });
-  props.push({ kind: "sphere", pos: [x, 2.25, z], radius: 0.32, color, collides: true });
+/** Framed poster on a wall. */
+function poster(
+  walls: WallBox[], side: "N" | "S" | "E" | "W",
+  half: number, along: number, y: number, w: number, h: number, art: number,
+) {
+  const t = 0.07, off = 0.6; // proud of the wall AND its wallpaper panel
+  const tex = `poster${art % 8}`;
+  if (side === "N") walls.push({ pos: [along, y, -half + off], size: [w, h, t], tex, noCollide: true });
+  if (side === "S") walls.push({ pos: [along, y,  half - off], size: [w, h, t], tex, noCollide: true });
+  if (side === "W") walls.push({ pos: [-half + off, y, along], size: [t, h, w], tex, noCollide: true });
+  if (side === "E") walls.push({ pos: [ half - off, y, along], size: [t, h, w], tex, noCollide: true });
 }
 
-function plant(props: Prop[], x: number, z: number, big = false) {
-  const h = big ? 2.6 : 1.6;
-  props.push({ kind: "cylinder", pos: [x, 0.25, z], radiusTop: 0.35, radiusBottom: 0.45, height: 0.5, color: "#b06a3a", collides: true });
-  props.push({ kind: "cylinder", pos: [x, 0.6 + h * 0.3, z], radiusTop: 0.09, radiusBottom: 0.12, height: h * 0.6, color: "#6a4a2a", collides: true });
-  props.push({ kind: "sphere", pos: [x, 0.7 + h * 0.72, z], radius: big ? 1.0 : 0.6, color: "#3a8a3a" });
+/** Poster placed on an interior partition face at world position. */
+function posterAt(walls: WallBox[], x: number, y: number, z: number, w: number, h: number, art: number, facing: "x" | "z") {
+  const t = 0.07;
+  const tex = `poster${art % 8}`;
+  if (facing === "z") walls.push({ pos: [x, y, z], size: [w, h, t], tex, noCollide: true });
+  else walls.push({ pos: [x, y, z], size: [t, h, w], tex, noCollide: true });
 }
 
-function tree(props: Prop[], x: number, z: number) {
-  props.push({ kind: "cylinder", pos: [x, 1.4, z], radiusTop: 0.22, radiusBottom: 0.32, height: 2.8, color: "#6a4a2a", collides: true });
-  props.push({ kind: "sphere", pos: [x, 3.6, z], radius: 1.7, color: "#3a9a4a" });
-  props.push({ kind: "sphere", pos: [x + 0.9, 3.1, z + 0.4], radius: 1.1, color: "#44aa54" });
-  props.push({ kind: "sphere", pos: [x - 0.8, 3.2, z - 0.5], radius: 1.0, color: "#329244" });
+/** Sunny window on an outer wall. */
+function windowOn(walls: WallBox[], side: "N" | "S" | "E" | "W", half: number, along: number, w = 3.4, h = 2.6, y = 2.6) {
+  const t = 0.1, off = 0.6; // proud of the wall AND its wallpaper panel
+  if (side === "N") walls.push({ pos: [along, y, -half + off], size: [w, h, t], tex: "windowDay", glow: true, noCollide: true });
+  if (side === "S") walls.push({ pos: [along, y,  half - off], size: [w, h, t], tex: "windowDay", glow: true, noCollide: true });
+  if (side === "W") walls.push({ pos: [-half + off, y, along], size: [t, h, w], tex: "windowDay", glow: true, noCollide: true });
+  if (side === "E") walls.push({ pos: [ half - off, y, along], size: [t, h, w], tex: "windowDay", glow: true, noCollide: true });
 }
 
-function cratePile(walls: WallBox[], x: number, z: number) {
-  walls.push({ pos: [x, 0.6, z], size: [1.6, 1.2, 1.6], color: "#a06a3a" });
-  walls.push({ pos: [x + 1.7, 0.6, z + 0.2], size: [1.4, 1.2, 1.4], color: "#8a5a30" });
-  walls.push({ pos: [x + 0.7, 1.7, z], size: [1.3, 1.0, 1.3], color: "#b07a44" });
+/** Sofa. dir: 0 faces +z, 1 faces -z, 2 faces +x, 3 faces -x */
+function sofa(walls: WallBox[], x: number, z: number, dir: 0 | 1 | 2 | 3, color: string, len = 3.4) {
+  const alongX = dir <= 1;
+  const seat: Vec3 = alongX ? [len, 0.55, 1.5] : [1.5, 0.55, len];
+  const back: Vec3 = alongX ? [len, 1.0, 0.45] : [0.45, 1.0, len];
+  const arm: Vec3 = alongX ? [0.45, 0.85, 1.5] : [1.5, 0.85, 0.45];
+  const bo = dir === 0 ? -0.55 : dir === 1 ? 0.55 : 0;
+  const boX = dir === 2 ? -0.55 : dir === 3 ? 0.55 : 0;
+  walls.push({ pos: [x, 0.35, z], size: seat, color, noTex: true });
+  walls.push({ pos: [x + boX * (alongX ? 0 : 1), 0.62, z + bo], size: back, color: shadeHex(color, -20), noTex: true });
+  if (alongX) {
+    walls.push({ pos: [x - len / 2 + 0.22, 0.5, z], size: arm, color: shadeHex(color, -12), noTex: true });
+    walls.push({ pos: [x + len / 2 - 0.22, 0.5, z], size: arm, color: shadeHex(color, -12), noTex: true });
+    // cushions
+    walls.push({ pos: [x - len / 4 + 0.1, 0.72, z + bo * 0.3], size: [len / 2 - 0.5, 0.22, 1.1], color: shadeHex(color, 18), noTex: true, noCollide: true });
+    walls.push({ pos: [x + len / 4 - 0.1, 0.72, z + bo * 0.3], size: [len / 2 - 0.5, 0.22, 1.1], color: shadeHex(color, 26), noTex: true, noCollide: true });
+  } else {
+    walls.push({ pos: [x, 0.5, z - len / 2 + 0.22], size: arm, color: shadeHex(color, -12), noTex: true });
+    walls.push({ pos: [x, 0.5, z + len / 2 - 0.22], size: arm, color: shadeHex(color, -12), noTex: true });
+    walls.push({ pos: [x + boX * 0.3, 0.72, z - len / 4 + 0.1], size: [1.1, 0.22, len / 2 - 0.5], color: shadeHex(color, 18), noTex: true, noCollide: true });
+    walls.push({ pos: [x + boX * 0.3, 0.72, z + len / 4 - 0.1], size: [1.1, 0.22, len / 2 - 0.5], color: shadeHex(color, 26), noTex: true, noCollide: true });
+  }
 }
 
-function bench(walls: WallBox[], x: number, z: number, rotX = false, color = "#7a4a24") {
-  const seat: Vec3 = rotX ? [0.6, 0.5, 2.4] : [2.4, 0.5, 0.6];
-  walls.push({ pos: [x, 0.45, z], size: seat, color });
+function shadeHex(hex: string, amt: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const c = (v: number) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0");
+  return `#${c((n >> 16) + amt)}${c(((n >> 8) & 0xff) + amt)}${c((n & 0xff) + amt)}`;
 }
 
-// ---------- Restaurant (120 x 120) ----------
-function makeRestaurant(): MapDef {
-  const W = 120, D = 120, H = 8;
-  const walls: WallBox[] = [
-    ...outerWalls(W, D, H, "#efe5d2"),
-    // ceiling (visual only)
-    { pos: [0, H, 0], size: [W, 0.3, D], color: "#f4ecd8", noTex: true, noCollide: true },
-  ];
-  const props: Prop[] = [];
+/** Bookshelf against a wall. facing: "S" means front faces +z etc. */
+function bookshelf(walls: WallBox[], x: number, z: number, facing: "N" | "S" | "E" | "W", w = 3, h = 3.2) {
+  const d = 0.9;
+  const alongX = facing === "N" || facing === "S";
+  walls.push({ pos: [x, h / 2, z], size: alongX ? [w, h, d] : [d, h, w], color: "#5a3a1a", noTex: true });
+  const off = d / 2 + 0.04;
+  const rep: [number, number] = [Math.max(1, Math.round(w / 3)), Math.max(1, Math.round(h / 3))];
+  if (facing === "S") walls.push({ pos: [x, h / 2, z + off], size: [w - 0.1, h - 0.15, 0.05], tex: "bookshelf", texRepeat: rep, noCollide: true });
+  if (facing === "N") walls.push({ pos: [x, h / 2, z - off], size: [w - 0.1, h - 0.15, 0.05], tex: "bookshelf", texRepeat: rep, noCollide: true });
+  if (facing === "E") walls.push({ pos: [x + off, h / 2, z], size: [0.05, h - 0.15, w - 0.1], tex: "bookshelf", texRepeat: rep, noCollide: true });
+  if (facing === "W") walls.push({ pos: [x - off, h / 2, z], size: [0.05, h - 0.15, w - 0.1], tex: "bookshelf", texRepeat: rep, noCollide: true });
+}
 
-  // ===== Dining hall (center) — round tables in a grid =====
-  const tableSpots: Vec3[] = [];
-  for (let gx = -2; gx <= 2; gx++) {
-    for (let gz = -1; gz <= 2; gz++) {
-      tableSpots.push([gx * 11, 0, gz * 10 - 4]);
+/** TV on a stand, screen facing "facing". */
+function tvUnit(walls: WallBox[], x: number, z: number, facing: "N" | "S" | "E" | "W") {
+  const alongX = facing === "N" || facing === "S";
+  walls.push({ pos: [x, 0.4, z], size: alongX ? [3.2, 0.8, 1.1] : [1.1, 0.8, 3.2], color: "#6a4a2a", noTex: true });
+  const sOff = facing === "S" ? 0.1 : facing === "N" ? -0.1 : facing === "E" ? 0.1 : -0.1;
+  walls.push({ pos: [x, 1.75, z], size: alongX ? [2.8, 1.7, 0.18] : [0.18, 1.7, 2.8], color: "#14141a", noTex: true });
+  if (alongX) walls.push({ pos: [x, 1.75, z + sOff], size: [2.55, 1.45, 0.05], tex: "tvScreen", glow: true, noCollide: true });
+  else walls.push({ pos: [x + sOff, 1.75, z], size: [0.05, 1.45, 2.55], tex: "tvScreen", glow: true, noCollide: true });
+}
+
+function bed(walls: WallBox[], x: number, z: number, alongX: boolean, blanket = "#4a8ad2") {
+  const frame: Vec3 = alongX ? [4.2, 0.5, 2.4] : [2.4, 0.5, 4.2];
+  walls.push({ pos: [x, 0.3, z], size: frame, color: "#6a4a2a", noTex: true });
+  walls.push({ pos: [x, 0.66, z], size: alongX ? [4.0, 0.3, 2.2] : [2.2, 0.3, 4.0], color: "#f0ece0", noTex: true });
+  // blanket covers most of the mattress
+  walls.push({ pos: [x + (alongX ? 0.5 : 0), 0.84, z + (alongX ? 0 : 0.5)], size: alongX ? [3.0, 0.14, 2.2] : [2.2, 0.14, 3.0], color: blanket, noTex: true, noCollide: true });
+  // pillow
+  walls.push({ pos: [x - (alongX ? 1.6 : 0), 0.88, z - (alongX ? 0 : 1.6)], size: alongX ? [0.8, 0.2, 1.4] : [1.4, 0.2, 0.8], color: "#ffffff", noTex: true, noCollide: true });
+  // headboard
+  walls.push({ pos: [x - (alongX ? 2.15 : 0), 0.9, z - (alongX ? 0 : 2.15)], size: alongX ? [0.15, 1.4, 2.4] : [2.4, 1.4, 0.15], color: "#5a3a1a", noTex: true });
+}
+
+function wardrobe(walls: WallBox[], x: number, z: number, alongX: boolean) {
+  walls.push({ pos: [x, 1.5, z], size: alongX ? [2.6, 3.0, 0.9] : [0.9, 3.0, 2.6], color: "#7a5230", noTex: true });
+  const t = 0.05;
+  if (alongX) {
+    walls.push({ pos: [x - 0.65, 1.5, z + 0.48], size: [1.18, 2.8, t], color: "#8a6240", noTex: true, noCollide: true });
+    walls.push({ pos: [x + 0.65, 1.5, z + 0.48], size: [1.18, 2.8, t], color: "#8a6240", noTex: true, noCollide: true });
+  } else {
+    walls.push({ pos: [x + 0.48, 1.5, z - 0.65], size: [t, 2.8, 1.18], color: "#8a6240", noTex: true, noCollide: true });
+    walls.push({ pos: [x + 0.48, 1.5, z + 0.65], size: [t, 2.8, 1.18], color: "#8a6240", noTex: true, noCollide: true });
+  }
+}
+
+function desk(walls: WallBox[], x: number, z: number) {
+  walls.push({ pos: [x, 0.72, z], size: [2.4, 0.12, 1.2], color: "#8a6240", noTex: true });
+  walls.push({ pos: [x - 1.05, 0.36, z], size: [0.12, 0.72, 1.1], color: "#6a4a2a", noTex: true });
+  walls.push({ pos: [x + 1.05, 0.36, z], size: [0.12, 0.72, 1.1], color: "#6a4a2a", noTex: true });
+  walls.push({ pos: [x + 0.4, 1.12, z - 0.3], size: [1.0, 0.68, 0.08], color: "#14141a", noTex: true, noCollide: true }); // monitor
+  walls.push({ pos: [x, 0.5, z + 1.0], size: [0.55, 1.0, 0.55], color: "#c23a3a", noTex: true }); // chair
+}
+
+function roundTable(walls: WallBox[], props: Prop[], x: number, z: number, top = "#c9963f", withChairs = true) {
+  props.push({ kind: "cylinder", pos: [x, 0.4, z], radiusTop: 0.16, radiusBottom: 0.28, height: 0.8, color: "#2a2018", collides: true });
+  props.push({ kind: "cylinder", pos: [x, 0.85, z], radiusTop: 1.15, radiusBottom: 1.15, height: 0.1, color: top, collides: true });
+  if (withChairs) {
+    for (const [dx, dz] of [[1.7, 0], [-1.7, 0], [0, 1.7], [0, -1.7]]) {
+      walls.push({ pos: [x + dx, 0.5, z + dz], size: [0.5, 1.0, 0.5], color: "#3a2a1a", noTex: true });
     }
   }
-  for (const [x, , z] of tableSpots) {
-    props.push({ kind: "cylinder", pos: [x, 0.4, z], radiusTop: 0.2, radiusBottom: 0.3, height: 0.8, color: "#2a2018", collides: true });
-    props.push({ kind: "cylinder", pos: [x, 0.85, z], radiusTop: 1.2, radiusBottom: 1.2, height: 0.1, color: "#c9963f", collides: true });
-    walls.push({ pos: [x + 1.7, 0.5, z], size: [0.5, 1, 0.5], color: "#3a2a1a" });
-    walls.push({ pos: [x - 1.7, 0.5, z], size: [0.5, 1, 0.5], color: "#3a2a1a" });
-    walls.push({ pos: [x, 0.5, z + 1.7], size: [0.5, 1, 0.5], color: "#3a2a1a" });
-    walls.push({ pos: [x, 0.5, z - 1.7], size: [0.5, 1, 0.5], color: "#3a2a1a" });
-    // pendant light
-    props.push({ kind: "sphere", pos: [x, 5.6, z], radius: 0.35, color: "#fff2c4", emissive: true });
-  }
-  rug(walls, 0, 2, 42, 34, "#a33c34");
-  rug(walls, 0, 2, 36, 28, "#c25a48");
+}
 
-  // ===== Long bar (west) =====
-  walls.push({ pos: [-44, 0.6, 6], size: [2.0, 1.2, 34], color: "#7a4a24" });
-  walls.push({ pos: [-44, 1.6, 6], size: [2.4, 0.2, 35], color: "#c9963f" });
-  walls.push({ pos: [-50, 2.6, 6], size: [1.0, 5.2, 36], color: "#5a3a1a" }); // back shelf
-  walls.push({ pos: [-49.15, 3.13, 6], size: [0.7, 0.1, 36], color: "#7a5a2a", noTex: true }); // bottle ledge
-  // bottles on the ledge
-  for (let i = 0; i < 12; i++) {
-    const bz = -10 + i * 3;
-    const colors = ["#3a8a4a", "#a03a3a", "#3a5aa0", "#c9963f", "#7a3aa0"];
-    props.push({ kind: "cylinder", pos: [-49.15, 3.6, bz], radiusTop: 0.12, radiusBottom: 0.16, height: 0.8, color: colors[i % colors.length] });
-  }
-  // bar stools
-  for (let i = 0; i < 9; i++) {
-    props.push({ kind: "cylinder", pos: [-41, 0.6, -8 + i * 3.5], radiusTop: 0.35, radiusBottom: 0.35, height: 1.2, color: "#4a2a14", collides: true });
-  }
+function kitchenCounterX(walls: WallBox[], x: number, z: number, len: number, backAt: "N" | "S") {
+  walls.push({ pos: [x, 0.55, z], size: [len, 1.1, 1.2], color: "#e8e4dc", noTex: true });
+  walls.push({ pos: [x, 1.14, z], size: [len + 0.12, 0.1, 1.32], tex: "marble", texRepeat: [Math.round(len / 2), 1] });
+  const bz = backAt === "N" ? z - 0.9 : z + 0.9;
+  walls.push({ pos: [x, 1.85, bz], size: [len, 1.3, 0.1], tex: "tileWhite", texRepeat: [Math.round(len / 1.4), 1], noCollide: true });
+}
 
-  // ===== Kitchen (north-east) =====
-  walls.push({ pos: [24, H / 2 - 1, -22], size: [40, H - 2, 0.6], color: "#e8d9b8" });
-  walls.push({ pos: [44, H / 2 - 1, -36], size: [0.6, H - 2, 28], color: "#e8d9b8" });
-  // door gap: kitchen wall stops leaving opening near x=6
-  walls.push({ pos: [30, 1.0, -32], size: [3, 2, 2.2], color: "#bfc4cc" }); // stove
-  walls.push({ pos: [34, 1.0, -32], size: [3, 2, 2.2], color: "#bfc4cc" });
-  walls.push({ pos: [40, 1.5, -32], size: [2.4, 3.0, 2.4], color: "#e8ecf2" }); // fridge
-  walls.push({ pos: [40, 1.5, -42], size: [2.4, 3.0, 2.4], color: "#e8ecf2" });
-  walls.push({ pos: [28, 0.9, -42], size: [8, 1.8, 2.4], color: "#4a4a52" });  // prep counter
-  walls.push({ pos: [16, 0.9, -34], size: [2.4, 1.8, 10], color: "#4a4a52" });
-  // hanging pots
+function fridge(walls: WallBox[], x: number, z: number) {
+  walls.push({ pos: [x, 1.55, z], size: [1.5, 3.1, 1.5], color: "#e8ecf2", noTex: true });
+  walls.push({ pos: [x, 1.55, z + 0.78], size: [1.3, 2.9, 0.05], color: "#d8dce4", noTex: true, noCollide: true });
+  walls.push({ pos: [x - 0.45, 1.8, z + 0.82], size: [0.08, 0.9, 0.06], color: "#8a8a92", noTex: true, noCollide: true });
+}
+
+function stove(walls: WallBox[], props: Prop[], x: number, z: number) {
+  // slightly taller & deeper than the counter run so faces never z-fight
+  walls.push({ pos: [x, 0.58, z], size: [1.8, 1.16, 1.3], color: "#3a3a42", noTex: true });
+  walls.push({ pos: [x, 1.2, z], size: [1.9, 0.08, 1.4], color: "#14141a", noTex: true });
+  for (const [dx, dz] of [[-0.45, -0.28], [0.45, -0.28], [-0.45, 0.28], [0.45, 0.28]]) {
+    props.push({ kind: "cylinder", pos: [x + dx, 1.27, z + dz], radiusTop: 0.22, radiusBottom: 0.22, height: 0.06, color: "#1a1a20" });
+  }
+}
+
+function bathtub(walls: WallBox[], x: number, z: number) {
+  walls.push({ pos: [x, 0.45, z], size: [3.4, 0.9, 1.8], color: "#f4f4f0", noTex: true });
+  walls.push({ pos: [x, 0.85, z], size: [2.9, 0.1, 1.3], color: "#7ac2e8", noTex: true, noCollide: true }); // water
+}
+
+function toilet(wallsArr: WallBox[], propsArr: Prop[], x: number, z: number) {
+  propsArr.push({ kind: "cylinder", pos: [x, 0.35, z], radiusTop: 0.42, radiusBottom: 0.34, height: 0.7, color: "#f4f4f0", collides: true });
+  wallsArr.push({ pos: [x, 0.95, z - 0.45], size: [0.7, 0.9, 0.35], color: "#f4f4f0", noTex: true });
+}
+
+function sink(propsArr: Prop[], x: number, z: number) {
+  propsArr.push({ kind: "cylinder", pos: [x, 0.45, z], radiusTop: 0.16, radiusBottom: 0.22, height: 0.9, color: "#e8e8e4", collides: true });
+  propsArr.push({ kind: "cylinder", pos: [x, 0.95, z], radiusTop: 0.42, radiusBottom: 0.3, height: 0.22, color: "#f4f4f0", collides: true });
+}
+
+function pendant(propsArr: Prop[], x: number, y: number, z: number, color = "#fff2c4") {
+  propsArr.push({ kind: "cylinder", pos: [x, y + 0.5, z], radiusTop: 0.02, radiusBottom: 0.02, height: 1.0, color: "#3a3a3a" });
+  propsArr.push({ kind: "sphere", pos: [x, y, z], radius: 0.35, color, emissive: true });
+}
+
+function floorLamp(propsArr: Prop[], x: number, z: number) {
+  propsArr.push({ kind: "cylinder", pos: [x, 0.8, z], radiusTop: 0.05, radiusBottom: 0.16, height: 1.6, color: "#3a3a3a", collides: true });
+  propsArr.push({ kind: "cylinder", pos: [x, 1.85, z], radiusTop: 0.3, radiusBottom: 0.45, height: 0.5, color: "#f4e0a0", emissive: true });
+}
+
+function plant(propsArr: Prop[], x: number, z: number, big = false) {
+  const h = big ? 2.4 : 1.5;
+  propsArr.push({ kind: "cylinder", pos: [x, 0.25, z], radiusTop: 0.32, radiusBottom: 0.42, height: 0.5, color: "#b06a3a", collides: true });
+  propsArr.push({ kind: "cylinder", pos: [x, 0.55 + h * 0.3, z], radiusTop: 0.08, radiusBottom: 0.11, height: h * 0.6, color: "#6a4a2a", collides: true });
+  propsArr.push({ kind: "sphere", pos: [x, 0.65 + h * 0.72, z], radius: big ? 0.95 : 0.58, color: "#3a8a3a" });
+}
+
+function statue(wallsArr: WallBox[], propsArr: Prop[], x: number, z: number, color = "#d8d8e0") {
+  wallsArr.push({ pos: [x, 0.35, z], size: [1.3, 0.7, 1.3], tex: "marble" });
+  propsArr.push({ kind: "cylinder", pos: [x, 1.3, z], radiusTop: 0.26, radiusBottom: 0.38, height: 1.2, color, collides: true });
+  propsArr.push({ kind: "sphere", pos: [x, 2.15, z], radius: 0.3, color, collides: true });
+}
+
+function cratePile(wallsArr: WallBox[], x: number, z: number) {
+  wallsArr.push({ pos: [x, 0.6, z], size: [1.6, 1.2, 1.6], tex: "woodDark", texRepeat: [1, 1] });
+  wallsArr.push({ pos: [x + 1.7, 0.6, z + 0.2], size: [1.4, 1.2, 1.4], tex: "woodDark", texRepeat: [1, 1] });
+  wallsArr.push({ pos: [x + 0.7, 1.7, z], size: [1.3, 1.0, 1.3], tex: "woodDark", texRepeat: [1, 1] });
+}
+
+// =============================================================================
+// MAP 1 — 메챠 하우스 (the flagship: a fully furnished home, 90 x 70)
+// =============================================================================
+
+function makeHouse(): MapDef {
+  const W = 90, D = 70, H = 6;
+  const walls: WallBox[] = [];
+  const propsArr: Prop[] = [];
+  outerWalls(walls, W, D, H, "#ece4d4");
+  ceiling(walls, W, D, H, "#f6f2e8");
+
+  // ---------- room dividers (with door gaps) ----------
+  // living (W side, z -35..5) | kitchen (E side, z -35..-5)
+  partition(walls, [0, H / 2, -28.5], [0.5, H, 13], undefined, "#e2d8c4"); // z -35..-22
+  partition(walls, [0, H / 2, -12],   [0.5, H, 14], undefined, "#e2d8c4"); // z -19..-5
+  // kitchen | bedroom (z = -5, x 0..45), door x 20..23
+  partition(walls, [10, H / 2, -5], [20, H, 0.5], undefined, "#e2d8c4");
+  partition(walls, [34, H / 2, -5], [22, H, 0.5], undefined, "#e2d8c4");
+  // living | hall+bath (z = 5, x -45..0), door x -12..-9
+  partition(walls, [-28.5, H / 2, 5], [33, H, 0.5], undefined, "#e2d8c4");
+  partition(walls, [-4.5, H / 2, 5],  [9, H, 0.5], undefined, "#e2d8c4");
+  // bath | hall (x = -20, z 5..35), door z 18..21
+  partition(walls, [-20, H / 2, 11.5], [0.5, H, 13], undefined, "#e2d8c4");
+  partition(walls, [-20, H / 2, 28],   [0.5, H, 14], undefined, "#e2d8c4");
+  // hall | bedroom (x = 0, z 5..35), door z 12..15
+  partition(walls, [0, H / 2, 8.5], [0.5, H, 7], undefined, "#e2d8c4");
+  partition(walls, [0, H / 2, 25],  [0.5, H, 20], undefined, "#e2d8c4");
+
+  // ---------- wallpaper per room ----------
+  wallPanel(walls, "W", W / 2, -15, 40, H - 0.4, "wallCream");   // living W
+  wallPanel(walls, "N", D / 2, -22.5, 45, H - 0.4, "wallCream"); // living N
+  wallPanel(walls, "N", D / 2, 22.5, 45, H - 0.4, "wallBlue");   // kitchen N
+  wallPanel(walls, "E", W / 2, -20, 30, H - 0.4, "wallBlue");    // kitchen E
+  wallPanel(walls, "E", W / 2, 15, 40, H - 0.4, "wallGreen");    // bedroom E
+  wallPanel(walls, "S", D / 2, 22.5, 45, H - 0.4, "wallGreen");  // bedroom S
+  wallPanel(walls, "W", W / 2, 20, 30, H - 0.4, "tileBlue");     // bath W
+  wallPanel(walls, "S", D / 2, -32.5, 25, H - 0.4, "tileBlue");  // bath S
+  wallPanel(walls, "S", D / 2, -10, 20, H - 0.4, "wallPurple");  // hall S
+
+  // ---------- floors per room (base = wood) ----------
+  floorArea(walls, 22.5, -20, 45, 30, "tileKitchen"); // kitchen
+  floorArea(walls, 22.5, 15, 45, 40, "carpetBlue");   // bedroom
+  floorArea(walls, -32.5, 20, 25, 30, "tileBlue");    // bathroom
+  floorArea(walls, -10, 20, 20, 30, "woodDark");      // hallway
+
+  // ---------- LIVING ROOM ----------
+  rug(walls, -22, -14, 12, 8, "#b04438");
+  sofa(walls, -22, -8.6, 1, "#3a6ac2");            // faces the TV (北)
+  sofa(walls, -29.5, -14, 2, "#3a6ac2", 2.6);      // corner piece faces +x
+  walls.push({ pos: [-22, 0.45, -13.6], size: [2.6, 0.5, 1.3], color: "#8a6240", noTex: true }); // coffee table
+  tvUnit(walls, -22, -33.6, "S");
+  bookshelf(walls, -38, -33.9, "S", 3.4);
+  bookshelf(walls, -8, -33.9, "S", 3.4);
+  bookshelf(walls, -44, -8, "E", 3);
+  floorLamp(propsArr, -14, -8);
+  plant(propsArr, -42, -30, true);
+  plant(propsArr, -3.5, -8);
+  statue(walls, propsArr, -36, 1, "#d8ccb4");
+  windowOn(walls, "W", W / 2, -24);
+  windowOn(walls, "W", W / 2, -6);
+  poster(walls, "N", D / 2, -14, 3.2, 3.4, 2.6, 0);
+  posterAt(walls, -0.32, 3.4, -12, 2.6, 2.2, 5, "x"); // on divider, living side
+  pendant(propsArr, -22, H - 1.2, -14);
+  pendant(propsArr, -36, H - 1.2, -22);
+
+  // ---------- KITCHEN ----------
+  kitchenCounterX(walls, 11, -33, 18, "N");
+  stove(walls, propsArr, 16, -33);
+  fridge(walls, 42.5, -32.5);
+  walls.push({ pos: [43.5, 1.4, -20], size: [1.6, 2.8, 8], color: "#e8e4dc", noTex: true }); // pantry cabinet
+  // island + stools
+  walls.push({ pos: [24, 0.6, -19], size: [6, 1.2, 2.4], color: "#c8b898", noTex: true });
+  walls.push({ pos: [24, 1.26, -19], size: [6.3, 0.12, 2.7], tex: "marble", texRepeat: [3, 1] });
+  for (let i = 0; i < 3; i++) {
+    propsArr.push({ kind: "cylinder", pos: [21 + i * 3, 0.6, -15.8], radiusTop: 0.32, radiusBottom: 0.32, height: 1.2, color: "#5a3a1a", collides: true });
+  }
+  // fruit bowl on island
+  propsArr.push({ kind: "sphere", pos: [23.3, 1.5, -19], radius: 0.22, color: "#e83a3a" });
+  propsArr.push({ kind: "sphere", pos: [24.2, 1.5, -18.7], radius: 0.2, color: "#f4a83a" });
+  propsArr.push({ kind: "sphere", pos: [24.9, 1.5, -19.3], radius: 0.2, color: "#3ae85c" });
+  roundTable(walls, propsArr, 10, -12, "#e8e4dc");
+  windowOn(walls, "N", D / 2, 30);
+  poster(walls, "E", W / 2, -12, 3.2, 3, 2.4, 2); // pizza poster
+  pendant(propsArr, 24, H - 1.4, -19, "#ffe8b0");
+  pendant(propsArr, 10, H - 1.4, -12, "#ffe8b0");
+
+  // ---------- BEDROOM ----------
+  bed(walls, 40, 26, false, "#4a8ad2");
+  wardrobe(walls, 20, 33.5, true);
+  desk(walls, 40, 2.5 + 5);   // desk near divider (z 7.5)
+  cratePile(walls, 5, 31);    // toy boxes
+  rug(walls, 28, 18, 8, 6, "#7a4ad2");
+  plant(propsArr, 3, 8);
+  poster(walls, "E", W / 2, 12, 3.2, 3, 2.4, 3);
+  poster(walls, "E", W / 2, 20, 3.2, 3, 2.4, 7);
+  poster(walls, "S", D / 2, 30, 3.2, 3, 2.4, 1);
+  windowOn(walls, "S", D / 2, 12);
+  pendant(propsArr, 28, H - 1.2, 20);
+
+  // ---------- BATHROOM ----------
+  bathtub(walls, -40, 31.5);
+  toilet(walls, propsArr, -42.5, 10);
+  sink(propsArr, -36, 8.5);
+  // mirror
+  walls.push({ pos: [-36, 2.6, 5.45], size: [2.2, 1.6, 0.06], color: "#cfe4ec", glow: true, noTex: true, noCollide: true });
+  walls.push({ pos: [-24, 1.0, 32], size: [1.6, 2.0, 1.2], color: "#e8e4dc", noTex: true }); // towel cabinet
+  propsArr.push({ kind: "sphere", pos: [-24, 2.25, 32], radius: 0.3, color: "#7ac2e8" }); // towels
+  pendant(propsArr, -34, H - 1.4, 20, "#eaf6ff");
+
+  // ---------- HALLWAY ----------
+  rug(walls, -10, 20, 3, 22, "#b04438");
+  walls.push({ pos: [-17, 1.0, 33.5], size: [2.4, 0.9, 1.2], color: "#8a6240", noTex: true }); // console table
+  plant(propsArr, -17, 30);
+  statue(walls, propsArr, -4, 32, "#c8b89a");
+  poster(walls, "S", D / 2, -14, 3.2, 2.6, 2.2, 6);
+  poster(walls, "S", D / 2, -6, 3.2, 2.6, 2.2, 4);
+  pendant(propsArr, -10, H - 1.2, 20);
+
+  return {
+    name: "house",
+    displayName: "메챠 하우스",
+    floorSize: [W, D],
+    floorTex: "woodFloor",
+    floorColor: "#c9a878",
+    wallColor: "#ece4d4",
+    ambientColor: "#fff4e0",
+    skyColor: "#ffeccc",
+    groundColor: "#8b6a3a",
+    fogNear: 60, fogFar: 190,
+    walls, props: propsArr,
+    spawnPoints: [
+      [-40, PLAYER_EYE, -30], [-6, PLAYER_EYE, -30],
+      [ 40, PLAYER_EYE, -30], [ 6, PLAYER_EYE, -10],
+      [ 40, PLAYER_EYE,  12], [ 10, PLAYER_EYE,  30],
+      [-10, PLAYER_EYE,  30], [-40, PLAYER_EYE,  20],
+      [-30, PLAYER_EYE, -20], [ 30, PLAYER_EYE, -20],
+    ],
+  };
+}
+
+// =============================================================================
+// MAP 2 — 레스토랑 (110 x 110)
+// =============================================================================
+
+function makeRestaurant(): MapDef {
+  const W = 110, D = 110, H = 7;
+  const walls: WallBox[] = [];
+  const propsArr: Prop[] = [];
+  outerWalls(walls, W, D, H, "#efe5d2");
+  ceiling(walls, W, D, H, "#f6efe0");
+
+  // wallpaper all around
+  wallPanel(walls, "N", D / 2, 0, 108, H - 0.4, "wallCream");
+  wallPanel(walls, "S", D / 2, 0, 108, H - 0.4, "wallCream");
+  wallPanel(walls, "W", W / 2, 0, 108, H - 0.4, "wallCream");
+  wallPanel(walls, "E", W / 2, 0, 108, H - 0.4, "wallCream");
+
+  // ---------- dining hall: booths along W wall ----------
   for (let i = 0; i < 4; i++) {
-    props.push({ kind: "sphere", pos: [26 + i * 4, 3.4, -38], radius: 0.3, color: "#8a8a92" });
+    const z = -36 + i * 18;
+    sofa(walls, -49, z - 3.4, 0, "#a03030", 3.2);
+    sofa(walls, -49, z + 3.4, 1, "#a03030", 3.2);
+    walls.push({ pos: [-49, 0.55, z], size: [2.6, 1.1, 2.2], color: "#7a4a24", noTex: true }); // booth table
+    walls.push({ pos: [-49, 1.14, z], size: [2.8, 0.08, 2.4], tex: "marble", texRepeat: [1, 1] });
+    pendant(propsArr, -49, H - 2.2, z);
+    posterAt(walls, -54.4, 3.2, z, 2.6, 2.2, i * 2 + 1, "x");
   }
 
-  // ===== Stage (south-east) =====
-  walls.push({ pos: [38, 0.5, 42], size: [26, 1.0, 20], color: "#7a2a2a" }); // stage floor
-  walls.push({ pos: [38, 3.4, 51], size: [26, 5.0, 0.8], color: "#5a1a1a" }); // backdrop
-  // curtains
-  walls.push({ pos: [26.5, 3.2, 46], size: [1.2, 5.4, 10], color: "#a03030", noTex: true });
-  walls.push({ pos: [49.5, 3.2, 46], size: [1.2, 5.4, 10], color: "#a03030", noTex: true });
-  // piano-ish block + mic
-  walls.push({ pos: [42, 1.8, 44], size: [4.5, 1.6, 2.2], color: "#141414" });
-  props.push({ kind: "cylinder", pos: [34, 1.7, 40], radiusTop: 0.05, radiusBottom: 0.05, height: 1.4, color: "#333333", collides: true });
-  props.push({ kind: "sphere", pos: [34, 2.5, 40], radius: 0.14, color: "#222222" });
-  // stage spotlights
-  props.push({ kind: "sphere", pos: [32, 6.4, 42], radius: 0.4, color: "#ffd24a", emissive: true });
-  props.push({ kind: "sphere", pos: [44, 6.4, 42], radius: 0.4, color: "#4ad2ff", emissive: true });
+  // round tables (center)
+  const tableSpots: [number, number][] = [];
+  for (let gx = 0; gx < 4; gx++) for (let gz = 0; gz < 3; gz++) {
+    tableSpots.push([-24 + gx * 12, -26 + gz * 13]);
+  }
+  for (const [x, z] of tableSpots) {
+    roundTable(walls, propsArr, x, z);
+    pendant(propsArr, x, H - 1.8, z);
+  }
+  rug(walls, -6, -13, 52, 44, "#8a3428");
 
-  // ===== Storage room (north-west) =====
-  walls.push({ pos: [-26, H / 2 - 1, -26], size: [0.6, H - 2, 28], color: "#e8d9b8" });
-  walls.push({ pos: [-38, H / 2 - 1, -12], size: [24, H - 2, 0.6], color: "#e8d9b8" });
-  cratePile(walls, -44, -30);
-  cratePile(walls, -36, -44);
-  cratePile(walls, -50, -46);
-  walls.push({ pos: [-30, 1.2, -50], size: [6, 2.4, 1.2], color: "#8a6a4a" }); // shelf
-  walls.push({ pos: [-30, 2.7, -50], size: [6, 0.2, 1.4], color: "#a58a5a" });
-  // sacks
-  props.push({ kind: "sphere", pos: [-46, 0.5, -38], radius: 0.55, color: "#c9a878", collides: true });
-  props.push({ kind: "sphere", pos: [-44.6, 0.5, -37], radius: 0.5, color: "#b89868", collides: true });
+  // ---------- bar (NE) ----------
+  walls.push({ pos: [40, 0.6, -34], size: [2.0, 1.2, 26], color: "#7a4a24", noTex: true });
+  walls.push({ pos: [40, 1.28, -34], size: [2.4, 0.12, 27], tex: "marble", texRepeat: [1, 6] });
+  walls.push({ pos: [50, 2.6, -34], size: [1.0, 5.2, 28], tex: "woodDark", texRepeat: [6, 2] });
+  walls.push({ pos: [49.1, 3.1, -34], size: [0.7, 0.1, 28], color: "#7a5a2a", noTex: true });
+  for (let i = 0; i < 9; i++) {
+    const colors = ["#3a8a4a", "#a03a3a", "#3a5aa0", "#c9963f", "#7a3aa0"];
+    propsArr.push({ kind: "cylinder", pos: [-0 + 49.1, 3.55, -46 + i * 3], radiusTop: 0.11, radiusBottom: 0.15, height: 0.8, color: colors[i % colors.length] });
+  }
+  for (let i = 0; i < 7; i++) {
+    propsArr.push({ kind: "cylinder", pos: [37, 0.6, -46 + i * 4], radiusTop: 0.33, radiusBottom: 0.33, height: 1.2, color: "#4a2a14", collides: true });
+  }
+  walls.push({ pos: [44, 4.2, -47.5], size: [8, 3.2, 0.15], tex: "menuBoard", noCollide: true });
 
-  // ===== Entry vestibule (south) =====
-  walls.push({ pos: [0, 2, 52], size: [14, 4, 0.5], color: "#efe5d2" });
-  walls.push({ pos: [-8, 2, 55], size: [0.5, 4, 6], color: "#efe5d2" });
-  walls.push({ pos: [8, 2, 55], size: [0.5, 4, 6], color: "#efe5d2" });
-  rug(walls, 0, 55, 12, 7, "#3a5a8a");
+  // ---------- kitchen (SE) ----------
+  partition(walls, [24, H / 2, 14], [30, H, 0.5], undefined, "#e8d9b8");   // kitchen front wall x 9..39
+  partition(walls, [12, H / 2, 33], [0.5, H, 38], undefined, "#e8d9b8");   // kitchen west wall z 14..52
+  floorArea(walls, 33, 34, 42, 38, "tileWhite");
+  kitchenCounterX(walls, 30, 51, 24, "S");
+  stove(walls, propsArr, 24, 51);
+  stove(walls, propsArr, 34, 51);
+  fridge(walls, 51, 44);
+  fridge(walls, 51, 39);
+  walls.push({ pos: [30, 0.6, 30], size: [12, 1.2, 3], color: "#bfc4cc", noTex: true }); // prep island
+  walls.push({ pos: [30, 1.26, 30], size: [12.3, 0.12, 3.3], tex: "marble", texRepeat: [5, 1] });
+  for (let i = 0; i < 4; i++) {
+    propsArr.push({ kind: "sphere", pos: [26 + i * 3, 3.4, 40], radius: 0.28, color: "#a8a8b0" }); // hanging pots
+  }
 
-  // ===== Restroom corridor (west-south) =====
-  walls.push({ pos: [-36, H / 2 - 1, 34], size: [0.6, H - 2, 24], color: "#e8d9b8" });
-  walls.push({ pos: [-46, H / 2 - 1, 24], size: [20, H - 2, 0.6], color: "#e8d9b8" });
-  walls.push({ pos: [-52, 1.4, 40], size: [3, 2.8, 0.4], color: "#4a90d2", noTex: true }); // blue door
-  walls.push({ pos: [-44, 1.4, 40], size: [3, 2.8, 0.4], color: "#d24a90", noTex: true }); // pink door
+  // ---------- stage (SW) ----------
+  walls.push({ pos: [-34, 0.5, 42], size: [26, 1.0, 18], tex: "woodDark", texRepeat: [8, 5] });
+  walls.push({ pos: [-34, 3.6, 50.5], size: [26, 5.4, 0.6], tex: "curtainRed", texRepeat: [8, 2] });
+  walls.push({ pos: [-46.2, 3.4, 45], size: [1.0, 5.8, 9], tex: "curtainRed", texRepeat: [3, 2] });
+  walls.push({ pos: [-21.8, 3.4, 45], size: [1.0, 5.8, 9], tex: "curtainRed", texRepeat: [3, 2] });
+  walls.push({ pos: [-30, 1.8, 44], size: [4.5, 1.6, 2.2], color: "#141414", noTex: true }); // piano
+  propsArr.push({ kind: "cylinder", pos: [-39, 1.75, 41], radiusTop: 0.05, radiusBottom: 0.05, height: 1.5, color: "#333333", collides: true });
+  propsArr.push({ kind: "sphere", pos: [-39, 2.6, 41], radius: 0.14, color: "#222222" });
+  propsArr.push({ kind: "sphere", pos: [-42, H - 0.8, 40], radius: 0.4, color: "#ffd24a", emissive: true });
+  propsArr.push({ kind: "sphere", pos: [-26, H - 0.8, 40], radius: 0.4, color: "#4ad2ff", emissive: true });
 
-  // ===== Planters and greenery =====
-  plant(props, -14, -20, true);
-  plant(props, 14, -20, true);
-  plant(props, -20, 30);
-  plant(props, 20, 30);
-  plant(props, -30, 46);
-  plant(props, 52, -8, true);
-  plant(props, 52, 12);
+  // ---------- entry (N center) ----------
+  partition(walls, [0, 1.8, -48], [12, 3.6, 0.5], undefined, "#e2d8c4");
+  rug(walls, 0, -51.5, 10, 5, "#3a5a8a");
+  statue(walls, propsArr, -8, -44);
+  statue(walls, propsArr, 8, -44);
 
-  // ===== Statues =====
-  statue(walls, props, -6, 38, "#d8d8e0");
-  statue(walls, props, 6, 38, "#c8b89a");
-
-  // ===== Wall art / posters (color spots for camouflage!) =====
-  posterOnWall(walls, "W", W / 2, -2, 3.6, 4, 3, "#e8564a");
-  posterOnWall(walls, "W", W / 2, 26, 3.6, 4, 3, "#f4c14a");
-  posterOnWall(walls, "W", W / 2, 44, 3.6, 4, 3, "#3aa08a");
-  posterOnWall(walls, "N", D / 2, -8, 3.6, 5, 3.2, "#4a6ad2");
-  posterOnWall(walls, "N", D / 2, 0, 3.6, 5, 3.2, "#d24a6a");
-  posterOnWall(walls, "E", W / 2, 8, 3.6, 6, 3.6, "#8a4ad2");
-  posterOnWall(walls, "S", D / 2, 24, 3.6, 5, 3, "#3ac86a");
-  posterOnWall(walls, "S", D / 2, -24, 3.6, 5, 3, "#f48a3a");
+  // ---------- greenery, windows, posters ----------
+  for (const [px, pz] of [[-20, 10], [8, 10], [-6, 30], [-52, 20], [20, -10], [52, 8]] as [number, number][]) {
+    plant(propsArr, px, pz, Math.abs(px) > 30);
+  }
+  windowOn(walls, "N", D / 2, -30); windowOn(walls, "N", D / 2, -18);
+  windowOn(walls, "N", D / 2, 18);  windowOn(walls, "N", D / 2, 30);
+  poster(walls, "S", D / 2, 8, 3.2, 3.4, 2.6, 2);
+  poster(walls, "S", D / 2, 0, 3.2, 3.4, 2.6, 4);
+  poster(walls, "E", W / 2, 20, 3.2, 3.4, 2.6, 0);
+  poster(walls, "E", W / 2, -8, 3.2, 3.4, 2.6, 5);
+  poster(walls, "W", W / 2, -50, 3.2, 3, 2.4, 6);
 
   return {
     name: "restaurant",
     displayName: "레스토랑",
     floorSize: [W, D],
+    floorTex: "woodFloor",
     floorColor: "#c9a878",
     wallColor: "#efe5d2",
     ambientColor: "#fff2d6",
     skyColor: "#ffe4b0",
     groundColor: "#8b6a3a",
-    fogNear: 70, fogFar: 220,
-    walls, props,
+    fogNear: 70, fogFar: 210,
+    walls, props: propsArr,
     spawnPoints: [
-      [-52, PLAYER_EYE, -52], [ 52, PLAYER_EYE, -52],
-      [-52, PLAYER_EYE,  52], [ 52, PLAYER_EYE,  30],
-      [  0, PLAYER_EYE, -46], [  0, PLAYER_EYE,  46],
-      [-52, PLAYER_EYE,   0], [ 52, PLAYER_EYE,   0],
-      [-20, PLAYER_EYE, -46], [ 20, PLAYER_EYE,  46],
+      [-50, PLAYER_EYE, -50], [ 50, PLAYER_EYE, -50],
+      [-50, PLAYER_EYE,  30], [ 46, PLAYER_EYE,  24],
+      [  0, PLAYER_EYE, -40], [  0, PLAYER_EYE,  40],
+      [-42, PLAYER_EYE,   0], [ 50, PLAYER_EYE,   0],
+      [-16, PLAYER_EYE,  44], [ 30, PLAYER_EYE,  20],
     ],
   };
 }
 
-// ---------- Market (150 x 150, outdoor) ----------
-function makeMarket(): MapDef {
-  const W = 150, D = 150;
-  const walls: WallBox[] = [
-    ...outerWalls(W, D, 5, "#b8a888"),
-  ];
-  const props: Prop[] = [];
+// =============================================================================
+// MAP 3 — 오락실 (100 x 100, neon night)
+// =============================================================================
 
-  // ===== Market stalls in three rows =====
-  const stallColors = ["#e85c4a", "#f4a83a", "#3aa87a", "#3a7ae8", "#a04ae8", "#e83a8a", "#3ac8d2"];
-  for (let row = 0; row < 3; row++) {
-    for (let i = 0; i < 7; i++) {
-      const x = -48 + i * 16;
-      const z = row === 0 ? -36 : row === 1 ? 0 : 36;
-      if (row === 1 && (i === 3)) continue; // keep plaza center open
-      walls.push({ pos: [x, 0.6, z], size: [5, 1.2, 2.4], color: "#8a6a4a" });
-      walls.push({ pos: [x - 2.5, 1.8, z - 1.2], size: [0.25, 3.6, 0.25], color: "#5a3a1a" });
-      walls.push({ pos: [x + 2.5, 1.8, z - 1.2], size: [0.25, 3.6, 0.25], color: "#5a3a1a" });
-      walls.push({ pos: [x - 2.5, 1.8, z + 1.2], size: [0.25, 3.6, 0.25], color: "#5a3a1a" });
-      walls.push({ pos: [x + 2.5, 1.8, z + 1.2], size: [0.25, 3.6, 0.25], color: "#5a3a1a" });
-      const c = stallColors[(i + row * 2) % stallColors.length];
-      walls.push({ pos: [x, 3.7, z], size: [5.8, 0.18, 3.2], color: c, noTex: true }); // canopy
-      walls.push({ pos: [x, 3.3, z - 1.7], size: [5.8, 0.7, 0.1], color: c, noTex: true, noCollide: true }); // canopy skirt
-      // goods
-      props.push({ kind: "sphere", pos: [x - 1.4, 1.5, z], radius: 0.28, color: "#e83a3a" });
-      props.push({ kind: "sphere", pos: [x - 0.5, 1.5, z + 0.3], radius: 0.26, color: "#f4a83a" });
-      props.push({ kind: "sphere", pos: [x + 0.5, 1.5, z - 0.2], radius: 0.28, color: "#3ae85c" });
-      props.push({ kind: "sphere", pos: [x + 1.4, 1.5, z + 0.2], radius: 0.24, color: "#f4ec3a" });
-    }
-  }
-
-  // ===== Central fountain plaza =====
-  props.push({ kind: "cylinder", pos: [0, 0.5, 0], radiusTop: 5, radiusBottom: 5.4, height: 1.0, color: "#8a8a92", collides: true });
-  props.push({ kind: "cylinder", pos: [0, 1.15, 0], radiusTop: 4.5, radiusBottom: 4.5, height: 0.3, color: "#4a9ad8", collides: true });
-  props.push({ kind: "cylinder", pos: [0, 2.2, 0], radiusTop: 0.5, radiusBottom: 0.8, height: 2.4, color: "#a8a8b0", collides: true });
-  props.push({ kind: "cylinder", pos: [0, 3.5, 0], radiusTop: 1.6, radiusBottom: 1.6, height: 0.25, color: "#9a9aa2", collides: true });
-  props.push({ kind: "sphere", pos: [0, 4.2, 0], radius: 0.5, color: "#6ac2f0" });
-  // plaza tiles
-  rug(walls, 0, 0, 26, 26, "#c8b090");
-  rug(walls, 0, 0, 20, 20, "#b89878");
-  // plaza statues
-  statue(walls, props, -10, -10, "#d0d0d8");
-  statue(walls, props, 10, 10, "#d0c0a0");
-
-  // ===== Trees along the edges =====
-  for (const [tx, tz] of [
-    [-62, -62], [-40, -64], [40, -64], [62, -62],
-    [-62, 62], [-40, 64], [40, 64], [62, 62],
-    [-64, -20], [-64, 20], [64, -20], [64, 20],
-  ] as [number, number][]) {
-    tree(props, tx, tz);
-  }
-
-  // ===== Crates, carts, benches =====
-  cratePile(walls, -58, -44); cratePile(walls, 56, -46);
-  cratePile(walls, -56, 44);  cratePile(walls, 58, 42);
-  cratePile(walls, -20, -18); cratePile(walls, 20, 16);
-  cratePile(walls, -20, 18);  cratePile(walls, 22, -18);
-  // wooden carts
-  for (const [cx, cz] of [[-34, -18], [34, 18], [0, -52], [0, 52]] as [number, number][]) {
-    walls.push({ pos: [cx, 1.0, cz], size: [4.2, 1.0, 2.2], color: "#9a6a3a" });
-    walls.push({ pos: [cx - 1.6, 1.9, cz], size: [0.5, 0.8, 2.2], color: "#9a6a3a" });
-    walls.push({ pos: [cx + 1.6, 1.9, cz], size: [0.5, 0.8, 2.2], color: "#9a6a3a" });
-    props.push({ kind: "cylinder", pos: [cx - 1.2, 0.5, cz + 1.15], radiusTop: 0.5, radiusBottom: 0.5, height: 0.2, color: "#4a3018" });
-    props.push({ kind: "cylinder", pos: [cx + 1.2, 0.5, cz + 1.15], radiusTop: 0.5, radiusBottom: 0.5, height: 0.2, color: "#4a3018" });
-    // produce on the cart
-    props.push({ kind: "sphere", pos: [cx - 0.8, 1.8, cz], radius: 0.32, color: "#f46a2a" });
-    props.push({ kind: "sphere", pos: [cx + 0.2, 1.8, cz + 0.3], radius: 0.3, color: "#e8d23a" });
-    props.push({ kind: "sphere", pos: [cx + 0.9, 1.8, cz - 0.2], radius: 0.28, color: "#c23a3a" });
-  }
-  bench(walls, -8, -14, false); bench(walls, 8, 14, false);
-  bench(walls, -14, 8, true);   bench(walls, 14, -8, true);
-
-  // ===== Street lamps =====
-  for (const x of [-40, 0, 40]) {
-    for (const z of [-56, 56]) {
-      props.push({ kind: "cylinder", pos: [x, 2.2, z], radiusTop: 0.12, radiusBottom: 0.14, height: 4.4, color: "#3a3a3a", collides: true });
-      props.push({ kind: "sphere", pos: [x, 4.6, z], radius: 0.4, color: "#fff2c4", emissive: true });
-    }
-  }
-  for (const z of [-30, 30]) {
-    for (const x of [-60, 60]) {
-      props.push({ kind: "cylinder", pos: [x, 2.2, z], radiusTop: 0.12, radiusBottom: 0.14, height: 4.4, color: "#3a3a3a", collides: true });
-      props.push({ kind: "sphere", pos: [x, 4.6, z], radius: 0.4, color: "#fff2c4", emissive: true });
-    }
-  }
-
-  // ===== Posters on the boundary walls =====
-  posterOnWall(walls, "N", D / 2, -30, 2.6, 5, 2.6, "#e8564a");
-  posterOnWall(walls, "N", D / 2, 30, 2.6, 5, 2.6, "#3a7ae8");
-  posterOnWall(walls, "S", D / 2, 0, 2.6, 6, 2.6, "#f4c14a");
-  posterOnWall(walls, "W", W / 2, 0, 2.6, 5, 2.6, "#3aa87a");
-  posterOnWall(walls, "E", W / 2, -20, 2.6, 5, 2.6, "#a04ae8");
-
-  return {
-    name: "market",
-    displayName: "야외 시장",
-    floorSize: [W, D],
-    floorColor: "#d8caa8",
-    wallColor: "#b8a888",
-    ambientColor: "#ffffff",
-    skyColor: "#a8d8f8",
-    groundColor: "#c0a878",
-    fogNear: 90, fogFar: 280,
-    walls, props,
-    spawnPoints: [
-      [-68, PLAYER_EYE, -68], [ 68, PLAYER_EYE, -68],
-      [-68, PLAYER_EYE,  68], [ 68, PLAYER_EYE,  68],
-      [  0, PLAYER_EYE, -68], [  0, PLAYER_EYE,  68],
-      [-68, PLAYER_EYE,   0], [ 68, PLAYER_EYE,   0],
-      [-30, PLAYER_EYE, -60], [ 30, PLAYER_EYE,  60],
-    ],
-  };
-}
-
-// ---------- Arcade (110 x 110, neon night) ----------
 function makeArcade(): MapDef {
-  const W = 110, D = 110, H = 7;
-  const walls: WallBox[] = [
-    ...outerWalls(W, D, H, "#2a1a3a"),
-    { pos: [0, H, 0], size: [W, 0.3, D], color: "#170d26", noTex: true, noCollide: true }, // ceiling
-  ];
-  const props: Prop[] = [];
+  const W = 100, D = 100, H = 6.5;
+  const walls: WallBox[] = [];
+  const propsArr: Prop[] = [];
   const neon = ["#ff3aa0", "#3affe0", "#f4ff3a", "#a83aff", "#3aff8a", "#ff8a3a"];
+  outerWalls(walls, W, D, H, "#241830");
+  ceiling(walls, W, D, H, "#150c22");
 
-  // ===== Arcade cabinet rows =====
+  wallPanel(walls, "N", D / 2, 0, 98, H - 0.4, "brickDark");
+  wallPanel(walls, "S", D / 2, 0, 98, H - 0.4, "brickDark");
+  wallPanel(walls, "W", W / 2, 0, 98, H - 0.4, "brickDark");
+  wallPanel(walls, "E", W / 2, 0, 98, H - 0.4, "brickDark");
+
+  // neon wall strips
+  for (const [side, along, c] of [["N", -20, 0], ["N", 20, 1], ["W", -20, 2], ["W", 24, 3], ["E", -20, 4], ["E", 24, 5], ["S", -28, 1], ["S", 28, 0]] as ["N" | "S" | "E" | "W", number, number][]) {
+    const t = 0.1, off = 0.6, half = side === "N" || side === "S" ? D / 2 : W / 2;
+    const sz: Vec3 = side === "N" || side === "S" ? [10, 0.5, t] : [t, 0.5, 10];
+    const pos: Vec3 = side === "N" ? [along, 4.6, -half + off]
+      : side === "S" ? [along, 4.6, half - off]
+      : side === "W" ? [-half + off, 4.6, along] : [half - off, 4.6, along];
+    walls.push({ pos, size: sz, color: neon[c], glow: true, noTex: true, noCollide: true });
+  }
+
+  // ---------- arcade cabinet rows ----------
   for (let row = 0; row < 4; row++) {
-    for (let i = 0; i < 10; i++) {
-      const x = -36 + i * 8;
-      const z = -34 + row * 15;
-      if (row >= 1 && row <= 2 && i >= 4 && i <= 5) continue; // dance floor gap
-      walls.push({ pos: [x, 1.2, z], size: [1.8, 2.4, 1.4], color: "#1a1030" });
-      walls.push({ pos: [x, 1.8, z - 0.75], size: [1.3, 1.0, 0.06], color: neon[(i + row) % neon.length], noTex: true, noCollide: true });
-      walls.push({ pos: [x, 2.65, z], size: [1.8, 0.35, 1.4], color: neon[(i + row * 2) % neon.length], noTex: true });
+    for (let i = 0; i < 8; i++) {
+      const x = -31.5 + i * 9;
+      const z = -32 + row * 14;
+      if (row >= 1 && row <= 2 && i >= 3 && i <= 4) continue; // dance floor gap
+      walls.push({ pos: [x, 1.25, z], size: [2.0, 2.5, 1.5], color: "#181030", noTex: true });
+      walls.push({ pos: [x, 1.85, z - 0.79], size: [1.5, 1.2, 0.06], tex: `poster${(i + row) % 8}`, glow: true, noCollide: true });
+      walls.push({ pos: [x, 2.72, z], size: [2.0, 0.4, 1.5], color: neon[(i + row * 2) % 6], glow: true, noTex: true });
+      walls.push({ pos: [x, 1.3, z - 0.85], size: [1.7, 0.18, 0.35], color: "#3a3a4a", noTex: true, noCollide: true }); // control deck
     }
   }
 
-  // ===== Dance floor (center) — glowing tiles =====
-  for (let tx = 0; tx < 6; tx++) {
-    for (let tz = 0; tz < 6; tz++) {
-      const c = neon[(tx + tz) % neon.length];
-      walls.push({ pos: [-7.5 + tx * 3, 0.04, -14.5 + tz * 3], size: [2.8, 0.08, 2.8], color: c, noTex: true, noCollide: true });
-    }
-  }
-  // DJ booth
-  walls.push({ pos: [0, 1.0, -22], size: [6, 2.0, 2], color: "#12081f" });
-  walls.push({ pos: [0, 2.4, -22], size: [6.4, 0.3, 2.4], color: "#3affe0", noTex: true });
+  // ---------- dance floor + DJ ----------
+  floorArea(walls, 0, -11, 16, 16, "neonGrid");
+  walls.push({ pos: [0, 1.0, -20], size: [6, 2.0, 2], color: "#100820", noTex: true });
+  walls.push({ pos: [0, 2.3, -20], size: [6.4, 0.35, 2.4], color: "#3affe0", glow: true, noTex: true });
+  propsArr.push({ kind: "sphere", pos: [0, H - 1.0, -11], radius: 0.55, color: "#f0f0ff", emissive: true });
 
-  // ===== Ticket / prize counter (south) =====
-  walls.push({ pos: [0, 0.6, 42], size: [16, 1.2, 1.6], color: "#a03a5a" });
-  walls.push({ pos: [0, 2.8, 46], size: [16, 5, 0.5], color: "#3a1a2a" });
-  walls.push({ pos: [0, 4.6, 45.6], size: [10, 0.7, 0.2], color: "#3affe0", noTex: true, noCollide: true }); // neon sign
-  // prize shelves with plushies
+  // ---------- prize counter (S) ----------
+  walls.push({ pos: [0, 0.6, 42], size: [16, 1.2, 1.6], color: "#a03a5a", noTex: true });
+  walls.push({ pos: [0, 1.28, 42], size: [16.4, 0.12, 2.0], tex: "marble", texRepeat: [6, 1] });
+  walls.push({ pos: [0, 2.9, 46.5], size: [16, 4.6, 0.5], tex: "woodDark", texRepeat: [6, 2] });
+  walls.push({ pos: [0, 4.7, 46.1], size: [10, 0.7, 0.15], color: "#3affe0", glow: true, noTex: true, noCollide: true });
   for (let i = 0; i < 8; i++) {
-    props.push({ kind: "sphere", pos: [-6 + i * 1.7, 2.2, 45.4], radius: 0.35, color: neon[i % neon.length] });
-    props.push({ kind: "sphere", pos: [-6 + i * 1.7, 3.3, 45.4], radius: 0.3, color: neon[(i + 3) % neon.length] });
+    propsArr.push({ kind: "sphere", pos: [-6.2 + i * 1.75, 2.2, 46], radius: 0.36, color: neon[i % 6] });
+    propsArr.push({ kind: "sphere", pos: [-6.2 + i * 1.75, 3.35, 46], radius: 0.3, color: neon[(i + 3) % 6] });
   }
 
-  // ===== Claw machines =====
-  for (const x of [-40, -30, 30, 40]) {
-    walls.push({ pos: [x, 1.5, 34], size: [2.2, 3.0, 2.2], color: "#2a1030" });
-    walls.push({ pos: [x, 3.15, 34], size: [2.4, 0.3, 2.4], color: "#ff3aa0", noTex: true });
-    props.push({ kind: "sphere", pos: [x - 0.4, 0.9, 34], radius: 0.3, color: neon[(x + 40) % neon.length >= 0 ? Math.abs(x) % 6 : 0] });
-    props.push({ kind: "sphere", pos: [x + 0.4, 0.9, 34.3], radius: 0.26, color: "#3aff8a" });
+  // ---------- claw machines ----------
+  for (const x of [-40, -31, 31, 40]) {
+    walls.push({ pos: [x, 1.55, 36], size: [2.3, 3.1, 2.3], color: "#2a1040", noTex: true });
+    walls.push({ pos: [x, 3.25, 36], size: [2.5, 0.3, 2.5], color: "#ff3aa0", glow: true, noTex: true });
+    propsArr.push({ kind: "sphere", pos: [x - 0.4, 0.85, 36], radius: 0.3, color: neon[Math.abs(x) % 6] });
+    propsArr.push({ kind: "sphere", pos: [x + 0.4, 0.85, 36.3], radius: 0.26, color: "#3aff8a" });
   }
 
-  // ===== Vending machines & snack bar (west) =====
+  // ---------- vending + snack bar (W) ----------
   for (let i = 0; i < 4; i++) {
-    walls.push({ pos: [-50, 1.5, -20 + i * 10], size: [1.8, 3.0, 2.6], color: i % 2 ? "#c23a3a" : "#3a6ac2" });
-    walls.push({ pos: [-49.2, 1.9, -20 + i * 10], size: [0.1, 1.4, 1.8], color: "#d8e8f8", noTex: true, noCollide: true });
+    walls.push({ pos: [-46.5, 1.5, -24 + i * 9], size: [1.8, 3.0, 2.6], color: "#c23a3a", noTex: true });
+    walls.push({ pos: [-45.5, 1.6, -24 + i * 9], size: [0.08, 2.6, 2.3], tex: "vending", noCollide: true });
   }
-  walls.push({ pos: [-44, 0.6, 20], size: [2.0, 1.2, 14], color: "#5a2a7a" }); // snack counter
-  walls.push({ pos: [-44, 1.5, 20], size: [2.4, 0.15, 14.5], color: "#f4ff3a", noTex: true });
+  walls.push({ pos: [-42, 0.6, 20], size: [2.0, 1.2, 14], color: "#4a2a6a", noTex: true });
+  walls.push({ pos: [-42, 1.3, 20], size: [2.4, 0.15, 14.5], color: "#f4ff3a", glow: true, noTex: true });
   for (let i = 0; i < 4; i++) {
-    props.push({ kind: "cylinder", pos: [-40.5, 0.6, 15 + i * 3.4], radiusTop: 0.35, radiusBottom: 0.35, height: 1.2, color: "#2a1a3a", collides: true });
+    propsArr.push({ kind: "cylinder", pos: [-38.5, 0.6, 15 + i * 3.4], radiusTop: 0.33, radiusBottom: 0.33, height: 1.2, color: "#241830", collides: true });
   }
 
-  // ===== Pool tables (east) =====
-  for (const z of [-16, 0, 16]) {
-    walls.push({ pos: [42, 0.9, z], size: [4.6, 0.5, 2.6], color: "#2a7a3a" });
-    walls.push({ pos: [42, 0.55, z], size: [4.9, 0.9, 2.9], color: "#4a2a14" });
-    props.push({ kind: "sphere", pos: [41.3, 1.25, z + 0.3], radius: 0.12, color: "#f4ec3a" });
-    props.push({ kind: "sphere", pos: [42.5, 1.25, z - 0.4], radius: 0.12, color: "#e83a3a" });
-    props.push({ kind: "sphere", pos: [43, 1.25, z + 0.5], radius: 0.12, color: "#ffffff" });
+  // ---------- pool tables (E) ----------
+  for (const z of [-14, 2, 18]) {
+    walls.push({ pos: [42, 0.55, z], size: [4.9, 0.9, 2.9], tex: "woodDark", texRepeat: [2, 1] });
+    walls.push({ pos: [42, 1.02, z], size: [4.4, 0.2, 2.4], color: "#2a8a4a", noTex: true });
+    propsArr.push({ kind: "sphere", pos: [41.3, 1.24, z + 0.3], radius: 0.12, color: "#f4ec3a" });
+    propsArr.push({ kind: "sphere", pos: [42.5, 1.24, z - 0.4], radius: 0.12, color: "#e83a3a" });
+    propsArr.push({ kind: "sphere", pos: [43, 1.24, z + 0.5], radius: 0.12, color: "#ffffff" });
+    pendant(propsArr, 42, 3.6, z, "#e8f4a0");
   }
 
-  // ===== Pillars, disco balls, neon wall strips =====
-  for (const [px, pz] of [[-20, -8], [20, -8], [-20, 12], [20, 12]] as [number, number][]) {
-    props.push({ kind: "cylinder", pos: [px, H / 2, pz], radiusTop: 0.6, radiusBottom: 0.6, height: H, color: "#3a2a4a", collides: true });
-    walls.push({ pos: [px, 3.2, pz], size: [1.5, 0.3, 1.5], color: neon[(px + pz + 40) % 6 < 0 ? 0 : (px + pz + 40) % 6], noTex: true, noCollide: true });
+  // ---------- pillars + disco ----------
+  for (const [px, pz] of [[-18, -4], [18, -4], [-18, 12], [18, 12]] as [number, number][]) {
+    propsArr.push({ kind: "cylinder", pos: [px, H / 2, pz], radiusTop: 0.6, radiusBottom: 0.7, height: H, color: "#32204a", collides: true });
+    walls.push({ pos: [px, 3.4, pz], size: [1.5, 0.25, 1.5], color: neon[(Math.abs(px + pz)) % 6], glow: true, noTex: true, noCollide: true });
   }
-  for (const x of [-25, 0, 25]) {
-    props.push({ kind: "sphere", pos: [x, 6.0, 0], radius: 0.55, color: "#f0f0ff", emissive: true });
+  for (const x of [-24, 24]) {
+    propsArr.push({ kind: "sphere", pos: [x, H - 0.9, 0], radius: 0.5, color: "#f0f0ff", emissive: true });
   }
-  posterOnWall(walls, "N", D / 2, -20, 3.4, 8, 2.4, "#ff3aa0");
-  posterOnWall(walls, "N", D / 2, 20, 3.4, 8, 2.4, "#3affe0");
-  posterOnWall(walls, "W", W / 2, -34, 3.4, 6, 2.4, "#f4ff3a");
-  posterOnWall(walls, "E", W / 2, -34, 3.4, 6, 2.4, "#a83aff");
-  posterOnWall(walls, "S", D / 2, -30, 3.4, 7, 2.4, "#3aff8a");
+  statue(walls, propsArr, -8, 30, "#b8b8d0");
+  statue(walls, propsArr, 8, 30, "#b8b8d0");
+  cratePile(walls, -44, 42);
+  cratePile(walls, 44, -44);
 
   return {
     name: "arcade",
     displayName: "오락실",
     floorSize: [W, D],
-    floorColor: "#1a0f2a",
-    wallColor: "#2a1a3a",
-    ambientColor: "#f0d0ff",
-    skyColor: "#3a1a5a",
-    groundColor: "#1a0a2a",
-    fogNear: 60, fogFar: 200,
-    walls, props,
+    floorTex: "arcadeCarpet",
+    floorColor: "#141030",
+    wallColor: "#241830",
+    ambientColor: "#e8d0ff",
+    skyColor: "#2a1444",
+    groundColor: "#140a24",
+    fogNear: 55, fogFar: 180,
+    walls, props: propsArr,
     spawnPoints: [
-      [-48, PLAYER_EYE, -48], [ 48, PLAYER_EYE, -48],
-      [-48, PLAYER_EYE,  48], [ 48, PLAYER_EYE,  48],
-      [  0, PLAYER_EYE, -48], [  0, PLAYER_EYE,  48],
-      [-48, PLAYER_EYE,   0], [ 48, PLAYER_EYE,   0],
-      [-24, PLAYER_EYE, -48], [ 24, PLAYER_EYE,  48],
+      [-44, PLAYER_EYE, -44], [ 36, PLAYER_EYE, -40],
+      [-44, PLAYER_EYE,  28], [ 44, PLAYER_EYE,  28],
+      [  0, PLAYER_EYE, -44], [  0, PLAYER_EYE,  32],
+      [-44, PLAYER_EYE,   0], [ 44, PLAYER_EYE,  10],
+      [-22, PLAYER_EYE,  42], [ 22, PLAYER_EYE, -44],
     ],
   };
 }
 
+const house = makeHouse();
 const restaurant = makeRestaurant();
-const market = makeMarket();
 const arcade = makeArcade();
 
-export const MAPS: Record<string, MapDef> = { restaurant, market, arcade };
-export const MAP_LIST = [restaurant, market, arcade];
+export const MAPS: Record<string, MapDef> = { house, restaurant, arcade };
+export const MAP_LIST = [house, restaurant, arcade];
 
-// Legacy names still might be in DB — alias to restaurant
-MAPS["warehouse"] = restaurant;
-MAPS["office"] = market;
+// Legacy names from older rooms — alias to the new maps
+MAPS["warehouse"] = house;
+MAPS["office"] = house;
+MAPS["market"] = house;
 MAPS["arena"] = arcade;
 
 export const PLAYER_EYE_HEIGHT = PLAYER_EYE;
