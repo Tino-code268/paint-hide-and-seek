@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { supabase } from "@/integrations/supabase/client";
 import { generateRoomCode } from "@/lib/auth-helpers";
 import { MAP_LIST } from "@/game/maps";
+import { getControlScheme, setControlScheme, type ControlScheme } from "@/game/controls";
 
 export const Route = createFileRoute("/_authenticated/lobby")({
   component: Lobby,
@@ -22,6 +23,8 @@ function Lobby() {
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [mapName, setMapName] = useState<string>("restaurant");
+  const [scheme, setScheme] = useState<ControlScheme>(() => getControlScheme());
+  const applyScheme = (s: ControlScheme) => { setScheme(s); setControlScheme(s); };
 
 
   useEffect(() => {
@@ -111,6 +114,21 @@ function Lobby() {
           <h1 className="text-4xl font-bold tracking-widest text-glow">로비</h1>
           <p className="mt-2 text-muted-foreground text-sm">방을 만들거나 코드로 참가하세요</p>
         </div>
+
+        <div className="flex justify-center mb-8">
+          <div className="inline-flex rounded-lg border border-border/60 overflow-hidden text-sm">
+            <span className="px-3 py-2 bg-muted/40 text-muted-foreground">조작</span>
+            <button
+              onClick={() => applyScheme("pc")}
+              className={`px-4 py-2 transition ${scheme === "pc" ? "bg-primary text-primary-foreground" : "hover:bg-muted/40"}`}
+            >PC (WASD)</button>
+            <button
+              onClick={() => applyScheme("mobile")}
+              className={`px-4 py-2 transition ${scheme === "mobile" ? "bg-primary text-primary-foreground" : "hover:bg-muted/40"}`}
+            >모바일 (터치)</button>
+          </div>
+        </div>
+
 
         <div className="grid gap-6 md:grid-cols-2">
           <Card className="bg-card/70 border-border/60">
