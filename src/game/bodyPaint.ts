@@ -40,6 +40,13 @@ export function applyStroke(canvases: PaintCanvases, textures: PaintTextures, s:
   const c = canvases[s.part];
   if (!c) return;
   const ctx = c.getContext("2d")!;
+  if (s.fill) {
+    // Fill the whole body part with one color (meccha-style quick camouflage)
+    ctx.fillStyle = s.color;
+    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    textures[s.part].needsUpdate = true;
+    return;
+  }
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.strokeStyle = s.color;

@@ -13,6 +13,8 @@ export type PlayerState = {
   ry: number;
   crouch: boolean;
   moving: boolean;
+  pose: number;      // 0 = normal, 1 = arms up, 2 = statue (frozen arms)
+  caught: boolean;   // hit by the hunter → out
   t: number;
 };
 
@@ -24,6 +26,14 @@ export type PaintStroke = {
   size: number;
   color: string;
   from?: { x: number; y: number };
+  fill?: boolean; // fill the whole part with `color`
+};
+
+export type ShotEvent = {
+  shooterId: string;
+  targets: string[];                 // userIds that were hit
+  points: [number, number, number][]; // world-space pellet impact points
+  color: string;                      // paint splat color
 };
 
 export type RemotePlayers = Map<string, PlayerState>;
@@ -35,16 +45,19 @@ export function usePresence(
   roomId: string | null,
   selfUserId: string,
   selfMeta: { username: string; role: "hider" | "seeker" | null },
-  onPaint?: (s: PaintStroke) => void,
-  onSync?: (s: { userId: string; strokes: PaintStroke[] }) => void,
+  handlers: {
+    onPaint?: (s: PaintStroke) => void;
+    onShot?: (e: ShotEvent) => void;
+    onWhistle?: (userId: string) => void;
+    /** Called when a newly-joined player asks for existing paint. Return my strokes. */
+    getMyStrokes?: () => PaintStroke[];
+  },
 ) {
   const remoteRef = useRef<RemotePlayers>(new Map());
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const lastSentRef = useRef(0);
-  const onPaintRef = useRef(onPaint);
-  const onSyncRef = useRef(onSync);
-  onPaintRef.current = onPaint;
-  onSyncRef.current = onSync;
+  const handlersRef = useRef(handlers);
+  handlersRef.current = handlers;
 
   useEffect(() => {
     if (!roomId) return;
@@ -76,14 +89,38 @@ export function usePresence(
       channel.on("broadcast", { event: "paint" }, ({ payload }) => {
         const s = payload as PaintStroke;
         if (!s || s.userId === selfUserId) return;
-        onPaintRef.current?.(s);
+        handlersRef.current.onPaint?.(s);
+      });
+
+      channel.on("broadcast", { event: "paint_batch" }, ({ payload }) => {
+        const b = payload as { userId: string; strokes: PaintStroke[] };
+        if (!b || b.userId === selfUserId) return;
+        for (const s of b.strokes) handlersRef.current.onPaint?.(s);
+      });
+
+      channel.on("broadcast", { event: "shot" }, ({ payload }) => {
+        const e = payload as ShotEvent;
+        if (!e || e.shooterId === selfUserId) return;
+        handlersRef.current.onShot?.(e);
+      });
+
+      channel.on("broadcast", { event: "whistle" }, ({ payload }) => {
+        const uid = (payload as { userId: string }).userId;
+        if (uid === selfUserId) return;
+        handlersRef.current.onWhistle?.(uid);
       });
 
       channel.on("broadcast", { event: "paint_req" }, ({ payload }) => {
         const uid = (payload as { userId: string }).userId;
         if (uid === selfUserId) return;
-        // Someone joined and wants my strokes
-        onSyncRef.current?.({ userId: selfUserId, strokes: [] });
+        // Someone joined and wants existing paint — send mine (capped).
+        const strokes = handlersRef.current.getMyStrokes?.() ?? [];
+        if (strokes.length === 0) return;
+        const capped = strokes.slice(-400);
+        channel.send({
+          type: "broadcast", event: "paint_batch",
+          payload: { userId: selfUserId, strokes: capped },
+        }).catch(() => {});
       });
 
       channel.subscribe((status) => {
@@ -121,7 +158,10 @@ export function usePresence(
     return () => clearInterval(t);
   }, []);
 
-  const sendState = (x: number, y: number, z: number, ry: number, crouch: boolean, moving: boolean) => {
+  const sendState = (
+    x: number, y: number, z: number, ry: number,
+    crouch: boolean, moving: boolean, pose: number, caught: boolean,
+  ) => {
     const ch = channelRef.current;
     if (!ch) return;
     const now = performance.now();
@@ -131,7 +171,7 @@ export function usePresence(
       userId: selfUserId,
       username: selfMeta.username,
       role: selfMeta.role,
-      x, y, z, ry, crouch, moving,
+      x, y, z, ry, crouch, moving, pose, caught,
       t: now,
     };
     ch.send({ type: "broadcast", event: "pos", payload }).catch(() => {});
@@ -143,5 +183,17 @@ export function usePresence(
     ch.send({ type: "broadcast", event: "paint", payload: { ...s, userId: selfUserId } }).catch(() => {});
   };
 
-  return { remoteRef, sendState, sendPaint };
+  const sendShot = (e: Omit<ShotEvent, "shooterId">) => {
+    const ch = channelRef.current;
+    if (!ch) return;
+    ch.send({ type: "broadcast", event: "shot", payload: { ...e, shooterId: selfUserId } }).catch(() => {});
+  };
+
+  const sendWhistle = () => {
+    const ch = channelRef.current;
+    if (!ch) return;
+    ch.send({ type: "broadcast", event: "whistle", payload: { userId: selfUserId } }).catch(() => {});
+  };
+
+  return { remoteRef, sendState, sendPaint, sendShot, sendWhistle };
 }

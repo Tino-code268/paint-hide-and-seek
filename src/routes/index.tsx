@@ -23,7 +23,7 @@ function Landing() {
             메챠 카멜레온
           </h1>
           <p className="mt-4 text-lg text-muted-foreground max-w-xl mx-auto">
-            친구들과 방을 만들어 3D 공간을 뛰어다니는 멀티플레이 숨바꼭질. 카멜레온처럼 숨거나, 사냥꾼처럼 추적하라.
+            새하얀 몸에 주변 색을 칠해 배경 속으로 녹아들어라. 헌터는 페인트 샷건을 들고 사냥한다.
           </p>
           <div className="mt-8 flex flex-wrap gap-3 justify-center">
             <Link to="/auth" className="px-6 py-3 rounded-md bg-primary text-primary-foreground font-semibold uppercase tracking-wider hover:brightness-110 transition">
@@ -32,8 +32,8 @@ function Landing() {
           </div>
           <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-4 text-left">
             {[
-              { t: "120초 은신 페이즈", d: "술래의 시야가 차단된 동안 3D 맵을 자유롭게 탐색하며 숨을 곳을 찾으세요." },
-              { t: "350초 추격 페이즈", d: "술래는 총을 들고 사냥합니다. 살아남는 카멜레온이 승리합니다." },
+              { t: "준비 10초 · 은신 120초", d: "헌터의 시야가 차단된 동안 E로 색을 추출하고 F로 몸을 칠해 배경에 녹아드세요. Q로 벽에 붙고 R로 포즈를 바꿔 완벽하게 위장!" },
+              { t: "추격 400초", d: "헌터는 페인트 샷건을 들고 사냥합니다. 끝까지 살아남는 카멜레온이 승리합니다." },
               { t: "6자리 방 코드", d: "코드 하나로 친구들을 즉시 초대. Realtime 동기화로 랙 없는 플레이." },
             ].map((f) => (
               <div key={f.t} className="rounded-lg border border-border bg-card/50 p-4">
