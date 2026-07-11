@@ -60,8 +60,16 @@ function GameRoute() {
       const { data: prof } = await supabase
         .from("profiles").select("username").eq("id", user.id).maybeSingle();
 
+      // RLS(보안 규칙) 때문에 방장이 다른 플레이어의 role을 DB에 못 쓴다.
+      // 대신 모두가 똑같이 계산할 수 있는 시드(방 id + 시작 시각)로 술래를 정한다 —
+      // 모든 클라이언트가 같은 결과를 얻으므로 역할이 비는 사람이 없다.
+      const seed = r.id + (r.started_at ?? "");
+      let h = 0;
+      for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+      const seekerIdx = rows.length > 0 ? Math.abs(h) % rows.length : 0;
+
       setMe({
-        role: (mine.role as "hider" | "seeker" | null) ?? null,
+        role: mineIdx === seekerIdx ? "seeker" : "hider",
         username: prof?.username ?? "player",
         spawnIndex: mineIdx >= 0 ? mineIdx : 0,
       });
@@ -288,7 +296,7 @@ function GameScene({
   const [splats, setSplats] = useState<Splat[]>([]);
   const splatSeq = useRef(0);
   const whistlesRef = useRef<Record<string, number>>({});
-  const [aliveInfo, setAliveInfo] = useState({ alive: 0, total: 0 });
+  const [aliveInfo, setAliveInfo] = useState({ alive: 0, total: 0, seekers: 0 });
   const [gameResult, setGameResult] = useState<null | "seeker" | "hider">(null);
 
   const addSplats = useCallback((points: [number, number, number][], color: string) => {
@@ -351,7 +359,9 @@ function GameScene({
           (uid === selfUserId ? myCaughtRef.current : !!remoteRef.current.get(uid)?.caught);
         if (!caught) alive++;
       }
-      setAliveInfo({ alive, total: hiders.size });
+      let seekers = me.role === "seeker" ? 1 : 0;
+      for (const [, st] of remoteRef.current) if (st.role === "seeker") seekers++;
+      setAliveInfo({ alive, total: hiders.size, seekers });
     }, 500);
     return () => clearInterval(t);
   }, [me.role, selfUserId, remoteRef]);
@@ -535,6 +545,7 @@ function GameScene({
         username={me.username}
         alive={aliveInfo.alive}
         total={aliveInfo.total}
+        seekers={aliveInfo.seekers}
         locked={locked}
         paintMode={paintMode}
         phase={phase}
@@ -777,42 +788,71 @@ function PlayerBody({
 
   return (
     <group ref={inner}>
-      {/* legs (pivot at hip) */}
-      <group ref={legLg} position={[-0.14, 0.86, 0]}>
-        <mesh position={[0, -0.4, 0]} castShadow {...h("legL")}>
-          <capsuleGeometry args={[0.115, 0.55, 6, 14]} />
+      {/* legs (pivot at hip; hip ball keeps the joint sealed while swinging) */}
+      <group ref={legLg} position={[-0.15, 0.88, 0]}>
+        <mesh castShadow>
+          <sphereGeometry args={[0.14, 14, 12]} />
+          <meshStandardMaterial map={textures.legL} color="#ffffff" roughness={0.55} />
+        </mesh>
+        <mesh position={[0, -0.42, 0]} castShadow {...h("legL")}>
+          <capsuleGeometry args={[0.13, 0.88, 6, 14]} />
           <meshStandardMaterial map={textures.legL} color="#ffffff" roughness={0.55} />
         </mesh>
       </group>
-      <group ref={legRg} position={[0.14, 0.86, 0]}>
-        <mesh position={[0, -0.4, 0]} castShadow {...h("legR")}>
-          <capsuleGeometry args={[0.115, 0.55, 6, 14]} />
+      <group ref={legRg} position={[0.15, 0.88, 0]}>
+        <mesh castShadow>
+          <sphereGeometry args={[0.14, 14, 12]} />
+          <meshStandardMaterial map={textures.legR} color="#ffffff" roughness={0.55} />
+        </mesh>
+        <mesh position={[0, -0.42, 0]} castShadow {...h("legR")}>
+          <capsuleGeometry args={[0.13, 0.88, 6, 14]} />
           <meshStandardMaterial map={textures.legR} color="#ffffff" roughness={0.55} />
         </mesh>
       </group>
-      {/* torso — smooth egg */}
-      <mesh position={[0, 1.14, 0]} scale={[1, 1.28, 0.85]} castShadow {...h("torso")}>
-        <sphereGeometry args={[0.37, 26, 22]} />
+      {/* torso — tall smooth blob (photo-matched: no neck, head melts into shoulders) */}
+      <mesh position={[0, 1.06, 0]} scale={[1, 1.42, 0.75]} castShadow {...h("torso")}>
+        <sphereGeometry args={[0.4, 26, 22]} />
         <meshStandardMaterial map={textures.torso} color="#ffffff" roughness={0.55} />
       </mesh>
-      {/* arms (pivot at shoulder) */}
-      <group ref={armLg} position={[-0.45, 1.46, 0]} rotation={[0, 0, 0.12]}>
-        <mesh position={[0, -0.32, 0]} castShadow {...h("armL")}>
-          <capsuleGeometry args={[0.095, 0.5, 6, 12]} />
+      {/* arms (pivot at shoulder; shoulder ball bridges arm & torso) */}
+      <group ref={armLg} position={[-0.415, 1.4, 0]} rotation={[0, 0, 0.03]}>
+        <mesh castShadow>
+          <sphereGeometry args={[0.12, 14, 12]} />
+          <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={0.55} />
+        </mesh>
+        <mesh position={[0, -0.34, 0]} castShadow {...h("armL")}>
+          <capsuleGeometry args={[0.088, 0.72, 6, 12]} />
           <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={0.55} />
         </mesh>
       </group>
-      <group ref={armRg} position={[0.45, 1.46, 0]} rotation={[0, 0, -0.12]}>
-        <mesh position={[0, -0.32, 0]} castShadow {...h("armR")}>
-          <capsuleGeometry args={[0.095, 0.5, 6, 12]} />
+      <group ref={armRg} position={[0.415, 1.4, 0]} rotation={[0, 0, -0.03]}>
+        <mesh castShadow>
+          <sphereGeometry args={[0.12, 14, 12]} />
           <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={0.55} />
         </mesh>
+        <mesh position={[0, -0.34, 0]} castShadow {...h("armR")}>
+          <capsuleGeometry args={[0.088, 0.72, 6, 12]} />
+          <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={0.55} />
+        </mesh>
+        {/* chameleons carry a little paintbrush (like the real game) */}
+        {!seeker && (
+          <group position={[0, -0.72, -0.1]} rotation={[1.25, 0, 0]}>
+            <mesh castShadow>
+              <cylinderGeometry args={[0.024, 0.03, 0.42, 8]} />
+              <meshStandardMaterial color="#8a5a2a" />
+            </mesh>
+            <mesh position={[0, 0.26, 0]}>
+              <cylinderGeometry args={[0.055, 0.03, 0.12, 8]} />
+              <meshStandardMaterial color="#f4a83a" emissive="#f47a2a" emissiveIntensity={0.3} />
+            </mesh>
+          </group>
+        )}
         {/* hunters carry the paint shotgun in their right hand */}
         {seeker && (
           <group position={[0.02, -0.62, -0.25]}>
             <mesh castShadow>
               <boxGeometry args={[0.09, 0.11, 0.55]} />
-              <meshStandardMaterial color="#2a2a32" />
+              <meshStandardMaterial map={getTex("paintSplat")} color="#ffffff" />
             </mesh>
             <mesh position={[0, 0.02, -0.42]}>
               <boxGeometry args={[0.06, 0.06, 0.4]} />
@@ -825,13 +865,9 @@ function PlayerBody({
           </group>
         )}
       </group>
-      {/* neck + head — smooth, faceless, pure white (paint it!) */}
-      <mesh position={[0, 1.62, 0]} castShadow>
-        <cylinderGeometry args={[0.09, 0.11, 0.14, 12]} />
-        <meshStandardMaterial map={textures.head} color="#ffffff" roughness={0.55} />
-      </mesh>
-      <mesh position={[0, 1.84, 0]} castShadow {...h("head")}>
-        <sphereGeometry args={[0.26, 26, 22]} />
+      {/* head — faceless, melts straight into the shoulders (no neck) */}
+      <mesh position={[0, 1.78, 0]} scale={[1, 1.08, 0.96]} castShadow {...h("head")}>
+        <sphereGeometry args={[0.29, 26, 22]} />
         <meshStandardMaterial map={textures.head} color="#ffffff" roughness={0.55} />
       </mesh>
     </group>
@@ -982,8 +1018,11 @@ function LocalPlayer({
   }, [walls, props]);
 
   useEffect(() => {
-    camera.position.set(spawn[0], spawn[1], spawn[2]);
-  }, [camera, spawn]);
+    // never spawn wedged inside furniture — nudge to the nearest free spot
+    const [fx, fz] = findFreeSpot(spawn[0], spawn[2], colliders, floorSize);
+    posRef.current.set(fx, spawn[1], fz);
+    camera.position.set(fx, spawn[1], fz);
+  }, [camera, spawn, colliders, floorSize]);
 
   // Paint mode: right-drag orbits around your body
   useEffect(() => {
@@ -1126,7 +1165,8 @@ function LocalPlayer({
     a.moving = moving;
     a.pose = poseRef.current;
     a.flat = stuckRef.current;
-    a.visible = !isSeeker;
+    // 잡히면(관전) 내 몸도 화면에서 사라진다
+    a.visible = !isSeeker && !caughtRef.current;
   }, [selfAnim, isSeeker]);
 
   useFrame((_, dtRaw) => {
@@ -1249,6 +1289,27 @@ function LocalPlayer({
   return null;
 }
 
+function findFreeSpot(
+  x: number, z: number, colliders: WallBox[], floorSize: [number, number],
+): [number, number] {
+  const halfW = floorSize[0] / 2 - 1, halfD = floorSize[1] / 2 - 1;
+  const blocked = (px: number, pz: number) => colliders.some((w) => {
+    const top = w.pos[1] + w.size[1] / 2, bot = w.pos[1] - w.size[1] / 2;
+    if (top < 0.55 || bot > 1.7) return false;
+    return px > w.pos[0] - w.size[0] / 2 - 0.5 && px < w.pos[0] + w.size[0] / 2 + 0.5 &&
+           pz > w.pos[2] - w.size[2] / 2 - 0.5 && pz < w.pos[2] + w.size[2] / 2 + 0.5;
+  });
+  if (!blocked(x, z)) return [x, z];
+  for (let r = 1.5; r <= 14; r += 1.5) {
+    for (let a = 0; a < 16; a++) {
+      const px = Math.max(-halfW, Math.min(halfW, x + Math.cos(a / 16 * Math.PI * 2) * r));
+      const pz = Math.max(-halfD, Math.min(halfD, z + Math.sin(a / 16 * Math.PI * 2) * r));
+      if (!blocked(px, pz)) return [px, pz];
+    }
+  }
+  return [x, z];
+}
+
 function tryAxisMove(p: THREE.Vector3, walls: WallBox[], floorSize: [number, number], dx: number, dz: number) {
   const nx = p.x + dx; const nz = p.z + dz; const r = PLAYER_RADIUS;
   const halfW = floorSize[0] / 2 - r - 0.3;
@@ -1350,11 +1411,11 @@ function SeekerGun({
     <group ref={group} userData={{ noRay: true }}>
       <mesh position={[0.32, -0.3, -0.55]} raycast={() => null}>
         <boxGeometry args={[0.11, 0.13, 0.42]} />
-        <meshStandardMaterial color="#2a2a32" />
+        <meshStandardMaterial map={getTex("paintSplat")} color="#ffffff" />
       </mesh>
       <mesh position={[0.32, -0.26, -0.95]} raycast={() => null}>
         <boxGeometry args={[0.07, 0.07, 0.55]} />
-        <meshStandardMaterial color="#3a3a44" />
+        <meshStandardMaterial map={getTex("paintSplat")} color="#e8e0d0" />
       </mesh>
       <mesh position={[0.32, -0.34, -0.8]} raycast={() => null}>
         <cylinderGeometry args={[0.05, 0.05, 0.2, 10]} />
@@ -1477,9 +1538,12 @@ function Mascot({
 // -----------------------------------------------------------------------------
 
 const PALETTE = [
-  "#000000", "#ffffff", "#e83a3a", "#f4a83a", "#f4ec3a",
-  "#3ae85c", "#3ac8e8", "#3a5ce8", "#a03ae8", "#e83aa0",
-  "#8b5a2b", "#c9a878",
+  "#000000", "#3a3a3a", "#7a7a7a", "#b8b8b8", "#ffffff",
+  "#7a1a1a", "#e83a3a", "#f47a3a", "#f4a83a", "#f4ec3a",
+  "#1a5a2a", "#3aa85a", "#3ae85c", "#a8e83a", "#d8ecd4",
+  "#1a3a6a", "#3a5ce8", "#3ac8e8", "#8ecdf2", "#cfe4f2",
+  "#4a1a6a", "#a03ae8", "#e83aa0", "#f6bcd6", "#e4dcf2",
+  "#5a3a1a", "#8b5a2b", "#c9963f", "#c9a878", "#f2e8d8",
 ];
 
 function PaintToolbar({
@@ -1491,15 +1555,18 @@ function PaintToolbar({
 }) {
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 bg-black/80 backdrop-blur border border-white/10 rounded-xl px-4 py-3 flex items-center gap-4 text-white shadow-2xl">
-      <div className="flex gap-1.5">
+      <div className="grid grid-cols-10 gap-1">
         {PALETTE.map((c) => (
           <button key={c} onClick={() => onColor(c)}
-            className={`w-7 h-7 rounded border-2 ${color === c ? "border-white scale-110" : "border-white/20"}`}
+            className={`w-6 h-6 rounded border-2 ${color === c ? "border-white scale-110" : "border-white/20"}`}
             style={{ background: c }} aria-label={c} />
         ))}
-        <input type="color" value={color} onChange={(e) => onColor(e.target.value)}
-          className="w-7 h-7 rounded bg-transparent cursor-pointer" />
       </div>
+      <label className="flex flex-col items-center gap-0.5 cursor-pointer">
+        <input type="color" value={color} onChange={(e) => onColor(e.target.value)}
+          className="w-9 h-8 rounded bg-transparent cursor-pointer" />
+        <span className="text-[9px] text-white/60">색상판</span>
+      </label>
       <div className="flex items-center gap-2 text-xs">
         <span className="text-white/60">굵기</span>
         <input type="range" min={2} max={40} value={size} onChange={(e) => onSize(Number(e.target.value))} className="w-24" />
@@ -1516,11 +1583,20 @@ function PaintToolbar({
 // HUD
 // -----------------------------------------------------------------------------
 
+function PersonIcon({ c }: { c: string }) {
+  return (
+    <svg width="15" height="21" viewBox="0 0 14 20" style={{ display: "block" }}>
+      <circle cx="7" cy="3.6" r="3.3" fill={c} />
+      <path d="M1.4 20 v-6.6 a5.6 5.6 0 0 1 11.2 0 V20 z" fill={c} />
+    </svg>
+  );
+}
+
 function Hud({
-  code, role, username, alive, total, locked, paintMode, phase, remaining, scheme, onSchemeChange, bodyColor, isSeeker,
+  code, role, username, alive, total, seekers, locked, paintMode, phase, remaining, scheme, onSchemeChange, bodyColor, isSeeker,
 }: {
   code: string; role: "hider" | "seeker" | null; username: string;
-  alive: number; total: number;
+  alive: number; total: number; seekers: number;
   locked: boolean; paintMode: boolean; phase: Phase; remaining: number;
   scheme: ControlScheme; onSchemeChange: (s: ControlScheme) => void;
   bodyColor: string; isSeeker: boolean;
@@ -1544,7 +1620,21 @@ function Hud({
           {mm}:{ss}
         </div>
         <div className="text-sm text-white font-semibold tracking-widest drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)]">
-          {PHASE_LABEL[phase]}
+          {phase === "hide" ? "찾기 시작까지" : PHASE_LABEL[phase]}
+        </div>
+        {/* meccha-style status row: white chameleons ⏳ red hunters */}
+        <div className="mt-1 flex items-center gap-2 bg-black/45 backdrop-blur px-3 py-1.5 rounded-full border border-white/10">
+          <div className="flex gap-0.5">
+            {Array.from({ length: Math.min(total, 16) }, (_, i) => (
+              <PersonIcon key={i} c={i < alive ? "#ffffff" : "#4a4a52"} />
+            ))}
+          </div>
+          <span className="text-lg leading-none">⏳</span>
+          <div className="flex gap-0.5">
+            {Array.from({ length: Math.min(seekers, 6) }, (_, i) => (
+              <PersonIcon key={i} c="#ff3860" />
+            ))}
+          </div>
         </div>
       </div>
 
@@ -1568,8 +1658,8 @@ function Hud({
 
       <div className="pointer-events-none fixed bottom-4 right-4 z-30 text-white text-right">
         <div className="text-xs uppercase tracking-widest text-white/60">남은 카멜레온</div>
-        <div className="text-5xl font-black leading-none drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
-          {alive}<span className="text-2xl text-white/50">/{total}</span>
+        <div className="text-6xl font-black leading-none drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]" style={{ fontFamily: "Georgia, serif" }}>
+          {alive}
         </div>
       </div>
 

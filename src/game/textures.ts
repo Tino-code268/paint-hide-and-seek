@@ -299,6 +299,78 @@ const PAINTERS: Record<string, Painter> = {
       ctx.fillText(t, s / 2, s * (0.38 + i * 0.15));
     });
   },
+
+  tileCheckerBW(ctx, s) {
+    const n = 4, t = s / n;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      ctx.fillStyle = (i + j) % 2 ? "#1a1a1a" : "#f4f2ec";
+      ctx.fillRect(i * t, j * t, t, t);
+    }
+  },
+  grass(ctx, s) {
+    ctx.fillStyle = "#7ab85a"; ctx.fillRect(0, 0, s, s);
+    speckle(ctx, s, 1400, ["#6aa84a", "#8ac86a", "#5a984a", "#90d070"], 3);
+    ctx.strokeStyle = "#5a984a"; ctx.lineWidth = 2; ctx.globalAlpha = 0.5;
+    for (let i = 0; i < 40; i++) {
+      const x = Math.random() * s, y = Math.random() * s;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 2, y - 7); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  },
+  barnWood(ctx, s) {
+    for (let i = 0; i < 6; i++) {
+      ctx.fillStyle = shade("#a83a2a", -12 + Math.floor(Math.random() * 24));
+      ctx.fillRect(i * s / 6, 0, s / 6, s);
+      ctx.fillStyle = "rgba(60,10,5,0.6)";
+      ctx.fillRect(i * s / 6, 0, 3, s);
+    }
+    ctx.fillStyle = "#f0ece0";
+    ctx.fillRect(0, 0, s, 10); ctx.fillRect(0, s - 10, s, 10);
+  },
+  hay(ctx, s) {
+    ctx.fillStyle = "#d8b04a"; ctx.fillRect(0, 0, s, s);
+    ctx.globalAlpha = 0.7;
+    for (let i = 0; i < 120; i++) {
+      ctx.strokeStyle = i % 2 ? "#c89a34" : "#e8c86a";
+      ctx.lineWidth = 2;
+      const y = Math.random() * s, x = Math.random() * s;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20 + Math.random() * 20, y + (Math.random() - 0.5) * 6); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  },
+  paintSplat(ctx, s) {
+    ctx.fillStyle = "#cfc6b8"; ctx.fillRect(0, 0, s, s);
+    const cols = ["#e83a8a", "#3ac8e8", "#f4ec3a", "#3ae85c", "#f4a83a", "#a83aff", "#e84a3a"];
+    for (let i = 0; i < 26; i++) {
+      ctx.fillStyle = cols[i % cols.length];
+      ctx.globalAlpha = 0.85;
+      const x = Math.random() * s, y = Math.random() * s, r = 6 + Math.random() * 22;
+      ctx.beginPath(); ctx.ellipse(x, y, r, r * (0.5 + Math.random() * 0.7), Math.random() * 3, 0, Math.PI * 2); ctx.fill();
+      if (i % 3 === 0) ctx.fillRect(x - 2, y, 4, r * 2.2); // drip
+    }
+    ctx.globalAlpha = 1;
+  },
+  cowArt(ctx, s) {
+    // cardboard cutout cow (the meccha farm classic!)
+    ctx.fillStyle = "#c8a878"; ctx.fillRect(0, 0, s, s); // cardboard
+    ctx.fillStyle = "#b89868"; ctx.fillRect(0, 0, s, 14); ctx.fillRect(0, s - 14, s, 14);
+    ctx.fillStyle = "#f4f2ec";
+    ctx.beginPath(); ctx.roundRect(s * 0.1, s * 0.22, s * 0.72, s * 0.42, s * 0.1); ctx.fill();
+    for (const lx of [0.16, 0.3, 0.58, 0.72]) {
+      ctx.fillRect(s * lx, s * 0.6, s * 0.08, s * 0.28);
+      ctx.fillStyle = "#1a1a1a"; ctx.fillRect(s * lx, s * 0.83, s * 0.08, s * 0.05); ctx.fillStyle = "#f4f2ec";
+    }
+    ctx.beginPath(); ctx.roundRect(s * 0.74, s * 0.12, s * 0.2, s * 0.26, s * 0.06); ctx.fill();
+    ctx.fillStyle = "#f0c8c8"; ctx.fillRect(s * 0.78, s * 0.3, s * 0.13, s * 0.08);
+    ctx.fillStyle = "#1a1a1a";
+    ctx.beginPath(); ctx.arc(s * 0.8, s * 0.2, s * 0.018, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(s * 0.86, s * 0.14, s * 0.05, s * 0.025, -0.4, 0, Math.PI * 2); ctx.fill();
+    for (const [px, py, rx, ry] of [[0.24, 0.32, 0.09, 0.07], [0.44, 0.45, 0.11, 0.08], [0.62, 0.3, 0.08, 0.06], [0.32, 0.52, 0.07, 0.05], [0.7, 0.5, 0.06, 0.05]]) {
+      ctx.beginPath(); ctx.ellipse(s * px, s * py, s * rx, s * ry, Math.random(), 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = "#f0c8c8";
+    ctx.beginPath(); ctx.ellipse(s * 0.52, s * 0.62, s * 0.05, s * 0.035, 0, 0, Math.PI * 2); ctx.fill();
+  },
 };
 
 // ---------- posters (art to imitate!) ----------
@@ -426,6 +498,7 @@ POSTER_ART.forEach((art, i) => {
 export const POSTER_COUNT = POSTER_ART.length;
 
 const SIZES: Record<string, number> = {
+  cowArt: 512, paintSplat: 512,
   windowDay: 512, tvScreen: 512, menuBoard: 512, vending: 512, bookshelf: 512,
   poster0: 512, poster1: 512, poster2: 512, poster3: 512, poster4: 512, poster5: 512, poster6: 512, poster7: 512,
 };
