@@ -301,6 +301,12 @@ function cratePile(wallsArr: WallBox[], x: number, z: number) {
   wallsArr.push({ pos: [x + 1.7, 0.6, z + 0.2], size: [1.4, 1.2, 1.4], tex: "woodDark", texRepeat: [1, 1] });
   wallsArr.push({ pos: [x + 0.7, 1.7, z], size: [1.3, 1.0, 1.3], tex: "woodDark", texRepeat: [1, 1] });
 }
+function bench(walls: WallBox[], x: number, z: number, rotX = false, color = "#7a4a24") {
+  const seat: Vec3 = rotX ? [0.6, 0.5, 2.4] : [2.4, 0.5, 0.6];
+  walls.push({ pos: [x, 0.45, z], size: seat, color, noTex: true });
+  walls.push({ pos: [x, 0.85, z + (rotX ? 0 : 0)], size: rotX ? [0.15, 0.9, 2.4] : [2.4, 0.9, 0.15], color, noTex: true, noCollide: true });
+}
+
 function washer(walls: WallBox[], props: Prop[], x: number, z: number, dryer = false) {
   walls.push({ pos: [x, 0.85, z], size: [1.4, 1.7, 1.4], color: dryer ? "#d8dce4" : "#f0f0f4", noTex: true });
   props.push({ kind: "sphere", pos: [x, 0.9, z + 0.72], radius: 0.36, color: "#4a6a8a" }); // round door
