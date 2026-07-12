@@ -720,7 +720,15 @@ function Splats({ splats }: { splats: Splat[] }) {
 // The Meccha mannequin — one body used by yourself AND remote players
 // -----------------------------------------------------------------------------
 
-const POSE_NAMES = ["기본", "만세!", "조각상"];
+const POSE_NAMES = ["서기", "엎드리기", "웅크리기", "조각상"];
+
+// 피규어 실루엣: 엉덩이→배→어깨→목 살짝 들어감→둥근 머리, 전부 한 곡면
+const BODY_PROFILE: [number, number][] = [
+  [0.02, 0.40], [0.24, 0.44], [0.33, 0.58], [0.385, 0.80],
+  [0.40, 1.00], [0.385, 1.20], [0.35, 1.38], [0.30, 1.50],
+  [0.245, 1.58], [0.27, 1.66], [0.315, 1.78], [0.32, 1.90],
+  [0.26, 2.02], [0.14, 2.10], [0.01, 2.13],
+];
 
 type BodySample = { moving: boolean; pose: number; crouch: boolean; flat: boolean };
 
@@ -737,6 +745,7 @@ function PlayerBody({
   };
 }) {
   const inner = useRef<THREE.Group>(null);
+  const lathePts = useMemo(() => BODY_PROFILE.map(([r, y]) => new THREE.Vector2(r, y)), []);
   const armLg = useRef<THREE.Group>(null);
   const armRg = useRef<THREE.Group>(null);
   const legLg = useRef<THREE.Group>(null);
@@ -748,8 +757,16 @@ function PlayerBody({
     const g = inner.current;
     if (!g) return;
     const lerp = Math.min(1, dt * 10);
-    g.scale.y += (((s.crouch ? 0.72 : 1) - g.scale.y)) * lerp;
+    // poses: 0 서기 · 1 엎드리기(바닥에 납작 엎드림) · 2 웅크리기(공처럼) · 3 조각상
+    const prone = s.pose === 1, curl = s.pose === 2, statue = s.pose === 3;
+    const scaleY = curl ? 0.5 : (s.crouch ? 0.72 : 1);
+    g.scale.y += (scaleY - g.scale.y) * lerp;
     g.scale.z += (((s.flat ? 0.42 : 1) - g.scale.z)) * lerp;
+    g.rotation.x += ((prone ? -Math.PI / 2 : 0) - g.rotation.x) * lerp;
+    // 바닥붙기(엎드림+flat)는 더 낮게 깔린다
+    g.position.y += ((prone ? (s.flat ? 0.15 : 0.34) : 0) - g.position.y) * lerp;
+    // 벽붙기 밀착은 서 있는 상태에서만 (엎드림은 바닥 방향으로 납작)
+    g.position.z += (((s.flat && !prone) ? 0.42 : 0) - g.position.z) * lerp;
 
     const target = s.moving && s.pose === 0 ? 1 : 0;
     swing.current += (target - swing.current) * Math.min(1, dt * 8);
@@ -758,25 +775,23 @@ function PlayerBody({
 
     const aL = armLg.current, aR = armRg.current, lL = legLg.current, lR = legRg.current;
     if (!aL || !aR || !lL || !lR) return;
-    if (s.pose === 1) {
-      // 만세!
-      aL.rotation.x += (0 - aL.rotation.x) * lerp;
-      aR.rotation.x += (0 - aR.rotation.x) * lerp;
-      aL.rotation.z += (2.7 - aL.rotation.z) * lerp;
-      aR.rotation.z += (-2.7 - aR.rotation.z) * lerp;
-      lL.rotation.x += (0 - lL.rotation.x) * lerp;
-      lR.rotation.x += (0 - lR.rotation.x) * lerp;
-    } else if (s.pose === 2) {
-      // 조각상 — 완전 정지
-      aL.rotation.x += (0 - aL.rotation.x) * lerp;
-      aR.rotation.x += (0 - aR.rotation.x) * lerp;
+    const ease = (o: THREE.Object3D, rx: number, rz: number) => {
+      o.rotation.x += (rx - o.rotation.x) * lerp;
+      o.rotation.z += (rz - o.rotation.z) * lerp;
+    };
+    if (prone) {
+      ease(aL, 0, 0.25); ease(aR, 0, -0.25);
+      ease(lL, 0, 0); ease(lR, 0, 0);
+    } else if (curl) {
+      // 팔로 무릎을 감싸 안은 공 모양
+      ease(aL, -1.25, 0.45); ease(aR, -1.25, -0.45);
+      ease(lL, -0.5, 0); ease(lR, -0.5, 0);
+    } else if (statue) {
+      ease(aL, 0, 0.1); ease(aR, 0, -0.1);
+      ease(lL, 0, 0); ease(lR, 0, 0);
+    } else {
       aL.rotation.z += (0.1 - aL.rotation.z) * lerp;
       aR.rotation.z += (-0.1 - aR.rotation.z) * lerp;
-      lL.rotation.x += (0 - lL.rotation.x) * lerp;
-      lR.rotation.x += (0 - lR.rotation.x) * lerp;
-    } else {
-      aL.rotation.z += (0.12 - aL.rotation.z) * lerp;
-      aR.rotation.z += (-0.12 - aR.rotation.z) * lerp;
       aL.rotation.x = Math.sin(t) * amp;
       aR.rotation.x = -Math.sin(t) * amp;
       lL.rotation.x = -Math.sin(t) * amp * 0.9;
@@ -788,65 +803,44 @@ function PlayerBody({
 
   return (
     <group ref={inner}>
-      {/* legs (pivot at hip; hip ball keeps the joint sealed while swinging) */}
-      <group ref={legLg} position={[-0.15, 0.88, 0]}>
-        <mesh castShadow>
-          <sphereGeometry args={[0.14, 14, 12]} />
-          <meshStandardMaterial map={textures.legL} color="#ffffff" roughness={0.55} />
-        </mesh>
-        <mesh position={[0, -0.42, 0]} castShadow {...h("legL")}>
-          <capsuleGeometry args={[0.13, 0.88, 6, 14]} />
-          <meshStandardMaterial map={textures.legL} color="#ffffff" roughness={0.55} />
+      {/* legs — thick, sunk deep into the hips (figurine-style, no visible joints) */}
+      <group ref={legLg} position={[-0.16, 0.82, 0]}>
+        <mesh position={[0, -0.4, 0]} castShadow {...h("legL")}>
+          <capsuleGeometry args={[0.15, 0.9, 6, 14]} />
+          <meshStandardMaterial map={textures.legL} color="#ffffff" roughness={1} />
         </mesh>
       </group>
-      <group ref={legRg} position={[0.15, 0.88, 0]}>
-        <mesh castShadow>
-          <sphereGeometry args={[0.14, 14, 12]} />
-          <meshStandardMaterial map={textures.legR} color="#ffffff" roughness={0.55} />
-        </mesh>
-        <mesh position={[0, -0.42, 0]} castShadow {...h("legR")}>
-          <capsuleGeometry args={[0.13, 0.88, 6, 14]} />
-          <meshStandardMaterial map={textures.legR} color="#ffffff" roughness={0.55} />
+      <group ref={legRg} position={[0.16, 0.82, 0]}>
+        <mesh position={[0, -0.4, 0]} castShadow {...h("legR")}>
+          <capsuleGeometry args={[0.15, 0.9, 6, 14]} />
+          <meshStandardMaterial map={textures.legR} color="#ffffff" roughness={1} />
         </mesh>
       </group>
-      {/* torso — tall smooth blob (photo-matched: no neck, head melts into shoulders) */}
-      <mesh position={[0, 1.06, 0]} scale={[1, 1.42, 0.75]} castShadow {...h("torso")}>
-        <sphereGeometry args={[0.4, 26, 22]} />
-        <meshStandardMaterial map={textures.torso} color="#ffffff" roughness={0.55} />
+      {/* body+head — ONE continuous lathe surface, zero seams (figurine!) */}
+      <mesh scale={[1, 1, 0.85]} castShadow {...h("torso")}>
+        <latheGeometry args={[lathePts, 26]} />
+        <meshStandardMaterial map={textures.torso} color="#ffffff" roughness={1} />
       </mesh>
       {/* arms (pivot at shoulder; shoulder ball bridges arm & torso) */}
-      <group ref={armLg} position={[-0.415, 1.4, 0]} rotation={[0, 0, 0.03]}>
+      <group ref={armLg} position={[-0.35, 1.42, 0]} rotation={[0, 0, 0.07]}>
         <mesh castShadow>
-          <sphereGeometry args={[0.12, 14, 12]} />
-          <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={0.55} />
+          <sphereGeometry args={[0.15, 14, 12]} />
+          <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={1} />
         </mesh>
-        <mesh position={[0, -0.34, 0]} castShadow {...h("armL")}>
-          <capsuleGeometry args={[0.088, 0.72, 6, 12]} />
-          <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={0.55} />
+        <mesh position={[0, -0.3, 0]} castShadow {...h("armL")}>
+          <capsuleGeometry args={[0.115, 0.7, 6, 12]} />
+          <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={1} />
         </mesh>
       </group>
-      <group ref={armRg} position={[0.415, 1.4, 0]} rotation={[0, 0, -0.03]}>
+      <group ref={armRg} position={[0.35, 1.42, 0]} rotation={[0, 0, -0.07]}>
         <mesh castShadow>
-          <sphereGeometry args={[0.12, 14, 12]} />
-          <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={0.55} />
+          <sphereGeometry args={[0.15, 14, 12]} />
+          <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={1} />
         </mesh>
-        <mesh position={[0, -0.34, 0]} castShadow {...h("armR")}>
-          <capsuleGeometry args={[0.088, 0.72, 6, 12]} />
-          <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={0.55} />
+        <mesh position={[0, -0.3, 0]} castShadow {...h("armR")}>
+          <capsuleGeometry args={[0.115, 0.7, 6, 12]} />
+          <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={1} />
         </mesh>
-        {/* chameleons carry a little paintbrush (like the real game) */}
-        {!seeker && (
-          <group position={[0, -0.72, -0.1]} rotation={[1.25, 0, 0]}>
-            <mesh castShadow>
-              <cylinderGeometry args={[0.024, 0.03, 0.42, 8]} />
-              <meshStandardMaterial color="#8a5a2a" />
-            </mesh>
-            <mesh position={[0, 0.26, 0]}>
-              <cylinderGeometry args={[0.055, 0.03, 0.12, 8]} />
-              <meshStandardMaterial color="#f4a83a" emissive="#f47a2a" emissiveIntensity={0.3} />
-            </mesh>
-          </group>
-        )}
         {/* hunters carry the paint shotgun in their right hand */}
         {seeker && (
           <group position={[0.02, -0.62, -0.25]}>
@@ -865,11 +859,6 @@ function PlayerBody({
           </group>
         )}
       </group>
-      {/* head — faceless, melts straight into the shoulders (no neck) */}
-      <mesh position={[0, 1.78, 0]} scale={[1, 1.08, 0.96]} castShadow {...h("head")}>
-        <sphereGeometry args={[0.29, 26, 22]} />
-        <meshStandardMaterial map={textures.head} color="#ffffff" roughness={0.55} />
-      </mesh>
     </group>
   );
 }
@@ -991,6 +980,7 @@ function LocalPlayer({
   const keys = useRef<Record<string, boolean>>({});
   const poseRef = useRef(0);
   const stuckRef = useRef(false);
+  const stuckFloorRef = useRef(false);
   const stuckYawRef = useRef(0);
   const freezeYawRef = useRef<number | null>(null);
 
@@ -1057,10 +1047,9 @@ function LocalPlayer({
 
   const eyedrop = useCallback(() => {
     if (caughtRef.current || paintModeRef.current) return;
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    raycaster.set(posRef.current, dir); // from the player's eyes, not the camera
-    raycaster.far = 30;
+    // ray straight through the crosshair dot — samples EXACTLY what the circle points at
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    raycaster.far = 40;
     const hits = raycaster.intersectObjects(scene.children, true);
     for (const h of hits) {
       if (chainHas(h.object, "noRay")) continue;
@@ -1073,41 +1062,64 @@ function LocalPlayer({
     if (frozenRef.current || paintModeRef.current || caughtRef.current) return;
     if (stuckRef.current) {
       stuckRef.current = false;
-      onToast("벽에서 떨어졌다");
+      stuckFloorRef.current = false;
+      onToast("떨어졌다!");
       return;
     }
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    dir.y = 0;
-    if (dir.lengthSq() < 0.01) { onToast("벽을 정면으로 바라보고 Q!"); return; }
-    dir.normalize();
-    raycaster.set(posRef.current, dir);
-    raycaster.far = 3.0;
-    const hits = raycaster.intersectObjects(scene.children, true);
-    for (const h of hits) {
-      if (chainHas(h.object, "noRay")) continue;
-      if (!chainHas(h.object, "wallMesh")) continue;
-      const n = h.face
-        ? h.face.normal.clone().transformDirection(h.object.matrixWorld)
-        : dir.clone().negate();
-      n.y = 0;
-      if (n.lengthSq() < 0.01) continue;
-      n.normalize();
-      const p = posRef.current;
-      p.x = h.point.x + n.x * (PLAYER_RADIUS + 0.05);
-      p.z = h.point.z + n.z * (PLAYER_RADIUS + 0.05);
-      velY.current = 0;
+    const p = posRef.current;
+    const tryHit = (origin: THREE.Vector3, dir: THREE.Vector3, far: number): THREE.Intersection | null => {
+      raycaster.set(origin, dir);
+      raycaster.far = far;
+      for (const h of raycaster.intersectObjects(scene.children, true)) {
+        if (chainHas(h.object, "noRay")) continue;
+        if (!chainHas(h.object, "wallMesh")) continue;
+        if (!h.face) continue;
+        const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+        n.y = 0;
+        if (n.lengthSq() < 0.01) continue; // floor/ceiling face
+        return h;
+      }
+      return null;
+    };
+    // 1) the wall under the crosshair dot
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+    let hit = tryHit(camera.position, camDir, 9);
+    if (hit && hit.point.distanceTo(p) > 3.8) hit = null; // too far to reach
+    // 2) otherwise auto-find the nearest wall around the player (8 directions)
+    if (!hit) {
+      let best: THREE.Intersection | null = null;
+      for (let a = 0; a < 8; a++) {
+        const d = new THREE.Vector3(Math.cos(a / 8 * Math.PI * 2), 0, Math.sin(a / 8 * Math.PI * 2));
+        const h2 = tryHit(p, d, 2.8);
+        if (h2 && (!best || h2.distance < best.distance)) best = h2;
+      }
+      hit = best;
+    }
+    if (!hit) {
+      // 벽이 없으면 그 자리 바닥에 납작 엎드려 붙는다!
       stuckRef.current = true;
-      stuckYawRef.current = Math.atan2(-n.x, -n.z); // back against the wall, facing the room
-      onToast("벽에 딱 붙었다! (Q 또는 Space로 떼기)");
+      stuckFloorRef.current = true;
+      stuckYawRef.current = yawRef.current;
+      velY.current = 0;
+      onToast("바닥에 납작 붙었다! (Q 또는 Space로 떼기)");
       return;
     }
-    onToast("가까운 벽이 없어! 벽을 바라보고 Q");
+    const n = hit.face!.normal.clone().transformDirection(hit.object.matrixWorld);
+    n.y = 0;
+    n.normalize();
+    p.x = hit.point.x + n.x * (PLAYER_RADIUS + 0.05);
+    p.z = hit.point.z + n.z * (PLAYER_RADIUS + 0.05);
+    velY.current = 0;
+    stuckRef.current = true;
+    stuckFloorRef.current = false;
+    stuckYawRef.current = Math.atan2(-n.x, -n.z); // back against the wall, facing the room
+    onToast("벽에 딱 붙었다! (Q 또는 Space로 떼기)");
   }, [camera, scene, raycaster, onToast]);
 
   const cyclePose = useCallback(() => {
     if (paintModeRef.current) return;
-    poseRef.current = (poseRef.current + 1) % 3;
+    poseRef.current = (poseRef.current + 1) % 4;
     onToast(`포즈: ${POSE_NAMES[poseRef.current]}`);
   }, [onToast]);
 
@@ -1214,14 +1226,17 @@ function LocalPlayer({
     if (stuckRef.current) {
       if (k["Space"] || ti.jump) {
         stuckRef.current = false;
+        stuckFloorRef.current = false;
         ti.jump = false;
       }
       if (!isSeeker) placeThirdPersonCamera();
       else camera.position.copy(p);
       const bodyYaw = freezeYawRef.current ?? stuckYawRef.current;
-      // crouch=false so the flattened body stays on the floor (feetY = y - eye)
+      // 바닥붙기 = 엎드리기 포즈, 벽붙기 = 서 있는 포즈로 밀착
+      const effPose = stuckFloorRef.current ? 1 : (poseRef.current === 1 ? 0 : poseRef.current);
       syncSelfAnim(false, false, bodyYaw);
-      sendState(p.x, p.y, p.z, bodyYaw, false, false, poseRef.current, caughtRef.current, true);
+      selfAnim.current.pose = effPose;
+      sendState(p.x, p.y, p.z, bodyYaw, false, false, effPose, caughtRef.current, true);
       return;
     }
 
@@ -1683,7 +1698,7 @@ function Hud({
                 ? <span className="text-[#ff3860]">좌클릭 — 페인트 샷건 발사!</span>
                 : <>
                     <span className="text-[#3ad0ff]">E</span> 색 추출 · <span className="text-[#3ad0ff]">F</span> 몸 전체 칠하기 · <span className="text-[#3ad0ff]">P</span> 정밀 그리기<br/>
-                    <span className="text-[#f4ec3a]">Q</span> 벽에 붙기 · <span className="text-[#f4ec3a]">R</span> 포즈 · <span className="text-[#f4ec3a]">우클릭(꾹)</span> 몸 회전 고정 · <span className="text-[#f4ec3a]">1</span> 휘파람
+                    <span className="text-[#f4ec3a]">Q</span> 벽·바닥 붙기 · <span className="text-[#f4ec3a]">R</span> 포즈 · <span className="text-[#f4ec3a]">우클릭(꾹)</span> 몸 회전 고정 · <span className="text-[#f4ec3a]">1</span> 휘파람
                   </>}
             </div>
           </div>
