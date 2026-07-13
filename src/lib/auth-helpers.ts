@@ -8,16 +8,22 @@ export function usernameToEmail(username: string): string {
 }
 
 export function isValidUsername(u: string): boolean {
-  return /^[a-zA-Z0-9_가-힣]{2,20}$/.test(u.trim());
+  // Login ID: ASCII only (used to synthesize an email)
+  return /^[a-zA-Z0-9_]{2,20}$/.test(u.trim());
 }
 
-export async function signUpWithUsername(username: string, password: string) {
+export function isValidNickname(n: string): boolean {
+  // Display name: allows Korean, letters, numbers, underscore, space
+  return /^[a-zA-Z0-9_가-힣 ]{2,16}$/.test(n.trim());
+}
+
+export async function signUpWithUsername(username: string, password: string, nickname: string) {
   const email = usernameToEmail(username);
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
-      data: { username: username.trim() },
+      data: { username: username.trim(), nickname: nickname.trim() },
       emailRedirectTo: `${window.location.origin}/lobby`,
     },
   });
