@@ -28,10 +28,10 @@ function Lobby() {
 
 
   useEffect(() => {
-    supabase.from("profiles").select("username, wins, losses").eq("id", user.id).maybeSingle()
+    supabase.from("profiles").select("username, nickname, wins, losses").eq("id", user.id).maybeSingle()
       .then(({ data }) => {
         if (data) {
-          setUsername(data.username);
+          setUsername((data as { nickname?: string; username: string }).nickname ?? data.username);
           setStats({ wins: data.wins, losses: data.losses });
         }
       });
