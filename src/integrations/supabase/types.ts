@@ -19,6 +19,7 @@ export type Database = {
           created_at: string
           id: string
           losses: number
+          nickname: string
           username: string
           wins: number
         }
@@ -26,6 +27,7 @@ export type Database = {
           created_at?: string
           id: string
           losses?: number
+          nickname: string
           username: string
           wins?: number
         }
@@ -33,6 +35,7 @@ export type Database = {
           created_at?: string
           id?: string
           losses?: number
+          nickname?: string
           username?: string
           wins?: number
         }
