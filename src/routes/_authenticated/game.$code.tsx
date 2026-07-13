@@ -58,7 +58,7 @@ function GameRoute() {
       if (!mine) { setError("이 방의 플레이어가 아닙니다"); return; }
 
       const { data: prof } = await supabase
-        .from("profiles").select("username").eq("id", user.id).maybeSingle();
+        .from("profiles").select("username, nickname").eq("id", user.id).maybeSingle();
 
       // RLS(보안 규칙) 때문에 방장이 다른 플레이어의 role을 DB에 못 쓴다.
       // 대신 모두가 똑같이 계산할 수 있는 시드(방 id + 시작 시각)로 술래를 정한다 —
