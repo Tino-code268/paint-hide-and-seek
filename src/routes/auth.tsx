@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
-import { isValidNickname, isValidUsername, signInWithUsername, signUpWithUsername } from "@/lib/auth-helpers";
+import { isValidLoginId, isValidNickname, signInWithUsername, signUpWithUsername } from "@/lib/auth-helpers";
 
 export const Route = createFileRoute("/auth")({
   component: AuthPage,
@@ -29,7 +29,7 @@ function AuthPage() {
     const form = new FormData(e.currentTarget);
     const username = String(form.get("username") || "");
     const password = String(form.get("password") || "");
-    if (!isValidUsername(username)) return toast.error("아이디는 2~20자, 영문/숫자/한글/_ 만");
+    if (!isValidLoginId(username)) return toast.error("아이디는 2~20자 영문/숫자만");
     if (password.length < 6) return toast.error("비밀번호는 6자 이상이어야 합니다");
     setLoading(true);
     const { error } = await signInWithUsername(username, password);
@@ -43,17 +43,21 @@ function AuthPage() {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const username = String(form.get("username") || "");
-    const nickname = String(form.get("nickname") || "");
     const password = String(form.get("password") || "");
-    if (!isValidUsername(username)) return toast.error("아이디는 2~20자, 영문/숫자/_ 만");
-    if (!isValidNickname(nickname)) return toast.error("닉네임은 2~16자, 한글/영문/숫자/_/공백");
+    const nickname = String(form.get("nickname") || "");
+    if (!isValidLoginId(username)) return toast.error("아이디는 2~20자 영문/숫자만");
+    if (!isValidNickname(nickname)) return toast.error("닉네임은 1~12자 (한글 가능!)");
     if (password.length < 6) return toast.error("비밀번호는 6자 이상이어야 합니다");
     setLoading(true);
     const { error } = await signUpWithUsername(username, password, nickname);
     setLoading(false);
     if (error) {
-      const msg = error.message.toLowerCase().includes("registered") || error.message.toLowerCase().includes("exists")
-        ? "이미 사용 중인 아이디입니다" : "회원가입 실패: " + error.message;
+      const low = error.message.toLowerCase();
+      const msg = low.includes("registered") || low.includes("exists")
+        ? "이미 사용 중인 아이디입니다"
+        : low.includes("database")
+        ? "이미 사용 중인 닉네임일 수 있어요 — 다른 닉네임으로 해보세요!"
+        : "회원가입 실패: " + error.message;
       return toast.error(msg);
     }
     toast.success("가입 완료! 로비로 이동합니다");
@@ -95,12 +99,12 @@ function AuthPage() {
               <TabsContent value="signup">
                 <form className="space-y-4 mt-4" onSubmit={handleSignUp}>
                   <div className="space-y-2">
-                    <Label htmlFor="signup-username">아이디 (영문/숫자/_ , 2~20자)</Label>
-                    <Input id="signup-username" name="username" required autoComplete="username" placeholder="myid_01" />
+                    <Label htmlFor="signup-username">아이디 (영문/숫자 2~20자)</Label>
+                    <Input id="signup-username" name="username" required autoComplete="username" />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="signup-nickname">닉네임 (한글 가능, 2~16자)</Label>
-                    <Input id="signup-nickname" name="nickname" required autoComplete="nickname" placeholder="카멜레온" />
+                    <Label htmlFor="signup-nickname">닉네임 (한글 가능, 1~12자)</Label>
+                    <Input id="signup-nickname" name="nickname" required maxLength={12} placeholder="예: 카멜레온왕" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="signup-password">비밀번호 (6자 이상)</Label>

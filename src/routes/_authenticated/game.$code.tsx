@@ -325,6 +325,8 @@ function GameScene({
   const [aliveInfo, setAliveInfo] = useState({ alive: 0, total: 0, seekers: 0 });
   const [gameResult, setGameResult] = useState<null | "seeker" | "hider">(null);
 
+  const remoteHolder = useRef<Map<string, PlayerState> | null>(null);
+
   const addSplats = useCallback((points: [number, number, number][], color: string) => {
     setSplats((prev) => {
       const next = [...prev];
@@ -341,6 +343,11 @@ function GameScene({
     addSplats(e.points, e.color);
     if (e.targets.length > 0) {
       sfxHit();
+      // 잡힘 알림: 헌터(쏜 사람)에겐 "잡았습니다", 나머지 모두에겐 "잡혔습니다"
+      for (const uid of e.targets) {
+        const nm = uid === selfUserId ? me.username : (remoteHolder.current?.get(uid)?.username ?? "누군가");
+        showToast(isLocal ? `🎯 ${nm}님을 잡았습니다!` : `💀 ${nm}님이 잡혔습니다!`);
+      }
       setCaughtIds((prev) => {
         const next = new Set(prev);
         for (const t of e.targets) next.add(t);
@@ -348,7 +355,7 @@ function GameScene({
       });
       if (e.targets.includes(selfUserId)) setMyCaught(true);
     }
-  }, [addSplats, selfUserId]);
+  }, [addSplats, selfUserId, me.username, showToast]);
 
   const handleRemotePaint = useCallback((s: PaintStroke) => {
     const entry = getOrCreatePaint(s.userId);
@@ -370,6 +377,8 @@ function GameScene({
       getMyStrokes: () => paintStoreRef.current.get(selfUserId)?.strokes ?? [],
     },
   );
+
+  remoteHolder.current = remoteRef.current;
 
   // ---- alive hider tracking + win check ----
   useEffect(() => {
@@ -713,7 +722,7 @@ function Walls({ mapDef }: { mapDef: MapDef }) {
         const map = w.tex ? getTex(w.tex, w.texRepeat?.[0] ?? 1, w.texRepeat?.[1] ?? 1) : undefined;
         return (
           <mesh key={i} position={w.pos} castShadow={!w.noCollide} receiveShadow
-            userData={{ wallMesh: !w.noCollide }}>
+            userData={{ wallMesh: !w.noCollide, decor: !!w.noCollide }}>
             <boxGeometry args={w.size} />
             <meshStandardMaterial
               map={map}
@@ -1189,7 +1198,8 @@ function LocalPlayer({
       raycaster.far = far;
       for (const h of raycaster.intersectObjects(scene.children, true)) {
         if (chainHas(h.object, "noRay")) continue;
-        if (!chainHas(h.object, "wallMesh")) continue;
+        // 진짜 벽 + 벽지/포스터/창문 같은 표면 장식 둘 다 인정 → 보이는 면에 딱 붙는다
+        if (!chainHas(h.object, "wallMesh") && !chainHas(h.object, "decor")) continue;
         if (!h.face) continue;
         const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
         n.y = 0;

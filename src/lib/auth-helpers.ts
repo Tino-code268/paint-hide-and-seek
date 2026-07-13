@@ -7,14 +7,15 @@ export function usernameToEmail(username: string): string {
   return `${username.trim().toLowerCase()}@${USERNAME_EMAIL_DOMAIN}`;
 }
 
-export function isValidUsername(u: string): boolean {
-  // Login ID: ASCII only (used to synthesize an email)
+// 로그인 아이디: 이메일로 변환되므로 영문/숫자만 가능
+export function isValidLoginId(u: string): boolean {
   return /^[a-zA-Z0-9_]{2,20}$/.test(u.trim());
 }
 
+// 닉네임: 한글 포함 아무 글자나 1~12자 (게임에서 보이는 이름)
 export function isValidNickname(n: string): boolean {
-  // Display name: allows Korean, letters, numbers, underscore, space
-  return /^[a-zA-Z0-9_가-힣 ]{2,16}$/.test(n.trim());
+  const t = n.trim();
+  return t.length >= 1 && t.length <= 12;
 }
 
 export async function signUpWithUsername(username: string, password: string, nickname: string) {
@@ -23,7 +24,7 @@ export async function signUpWithUsername(username: string, password: string, nic
     email,
     password,
     options: {
-      data: { username: username.trim(), nickname: nickname.trim() },
+      data: { username: nickname.trim() }, // 닉네임이 게임 표시 이름(profiles.username)이 된다
       emailRedirectTo: `${window.location.origin}/lobby`,
     },
   });
