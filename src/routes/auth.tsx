@@ -95,8 +95,12 @@ function AuthPage() {
               <TabsContent value="signup">
                 <form className="space-y-4 mt-4" onSubmit={handleSignUp}>
                   <div className="space-y-2">
-                    <Label htmlFor="signup-username">아이디 (2~20자)</Label>
-                    <Input id="signup-username" name="username" required autoComplete="username" />
+                    <Label htmlFor="signup-username">아이디 (영문/숫자/_ , 2~20자)</Label>
+                    <Input id="signup-username" name="username" required autoComplete="username" placeholder="myid_01" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="signup-nickname">닉네임 (한글 가능, 2~16자)</Label>
+                    <Input id="signup-nickname" name="nickname" required autoComplete="nickname" placeholder="카멜레온" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="signup-password">비밀번호 (6자 이상)</Label>
