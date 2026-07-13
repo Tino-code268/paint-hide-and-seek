@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
-import { isValidUsername, signInWithUsername, signUpWithUsername } from "@/lib/auth-helpers";
+import { isValidNickname, isValidUsername, signInWithUsername, signUpWithUsername } from "@/lib/auth-helpers";
 
 export const Route = createFileRoute("/auth")({
   component: AuthPage,
