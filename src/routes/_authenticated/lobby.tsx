@@ -28,10 +28,10 @@ function Lobby() {
 
 
   useEffect(() => {
-    supabase.from("profiles").select("username, nickname, wins, losses").eq("id", user.id).maybeSingle()
+    supabase.from("profiles").select("username, wins, losses").eq("id", user.id).maybeSingle()
       .then(({ data }) => {
         if (data) {
-          setUsername((data as { nickname?: string; username: string }).nickname ?? data.username);
+          setUsername(data.username);
           setStats({ wins: data.wins, losses: data.losses });
         }
       });
@@ -47,7 +47,7 @@ function Lobby() {
         code = generateRoomCode();
         const { data, error } = await supabase
           .from("rooms")
-          .insert({ code, host_id: user.id, map_name: mapName })
+          .insert({ code, host_id: user.id, map_name: mapName, max_players: 30 })
           .select("id")
           .single();
         if (!error && data) { roomId = data.id; break; }

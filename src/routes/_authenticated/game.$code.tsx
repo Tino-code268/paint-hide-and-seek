@@ -58,7 +58,7 @@ function GameRoute() {
       if (!mine) { setError("이 방의 플레이어가 아닙니다"); return; }
 
       const { data: prof } = await supabase
-        .from("profiles").select("username, nickname").eq("id", user.id).maybeSingle();
+        .from("profiles").select("username").eq("id", user.id).maybeSingle();
 
       // RLS(보안 규칙) 때문에 방장이 다른 플레이어의 role을 DB에 못 쓴다.
       // 대신 모두가 똑같이 계산할 수 있는 시드(방 id + 시작 시각)로 술래를 정한다 —
@@ -70,7 +70,7 @@ function GameRoute() {
 
       setMe({
         role: mineIdx === seekerIdx ? "seeker" : "hider",
-        username: (prof as { nickname?: string; username?: string } | null)?.nickname ?? prof?.username ?? "player",
+        username: prof?.username ?? "player",
         spawnIndex: mineIdx >= 0 ? mineIdx : 0,
       });
     })();
@@ -255,6 +255,21 @@ function GameScene({
 
   const spawn = mapDef.spawnPoints[me.spawnIndex % mapDef.spawnPoints.length];
 
+  const navigate = useNavigate();
+  const [pickMode, setPickMode] = useState(false);
+  const paintingActive = useRef(false); // 지금 몸에 그리는 중인지 (카메라 회전과 구분)
+
+  // 첫 터치/클릭에 전체 화면 진입 (모바일 주소창·화면 당김 방지)
+  useEffect(() => {
+    const goFull = () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.().catch(() => {});
+      }
+    };
+    window.addEventListener("pointerdown", goFull);
+    return () => window.removeEventListener("pointerdown", goFull);
+  }, []);
+
   // live self pose for the visible third-person body
   const selfAnim = useRef<SelfAnim>({
     x: spawn[0], z: spawn[2], feetY: 0, yaw: 0,
@@ -383,6 +398,20 @@ function GameScene({
     if (gameResult && document.pointerLockElement) document.exitPointerLock();
   }, [gameResult]);
 
+  // 게임 종료 → 자동으로 대기실 복귀 (방장이 방 상태를 되돌리면 모두 이동)
+  useEffect(() => {
+    if (!gameResult) return;
+    const t1 = setTimeout(() => {
+      if (room.host_id === selfUserId) {
+        void supabase.from("rooms").update({ status: "waiting" }).eq("id", room.id).then(() => {});
+      }
+    }, 4000);
+    const t2 = setTimeout(() => {
+      navigate({ to: "/room/$code", params: { code: room.code } });
+    }, 8000);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [gameResult, room.host_id, room.id, room.code, selfUserId, navigate]);
+
   // P toggles paint mode (hiders only)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -505,6 +534,7 @@ function GameScene({
             textures={getOrCreatePaint(selfUserId).textures}
             paintMode={paintMode}
             onPaint={applyLocalStroke}
+            paintingActive={paintingActive}
           />
         )}
 
@@ -525,6 +555,9 @@ function GameScene({
           onFill={fillSelf}
           onWhistle={handleSelfWhistle}
           onToast={showToast}
+          pickMode={pickMode}
+          setPickMode={setPickMode}
+          paintingActive={paintingActive}
         />
 
         <SeekerGun
@@ -555,6 +588,12 @@ function GameScene({
         bodyColor={bodyColor}
         isSeeker={isSeeker}
       />
+
+      {pickMode && (
+        <div className="pointer-events-none fixed top-24 left-1/2 -translate-x-1/2 z-40 bg-black/80 text-white px-5 py-2 rounded-full text-sm font-bold border border-[#3ad0ff] shadow-lg">
+          🎨 색을 딸 곳을 클릭/터치! <span className="text-white/50">(E로 취소)</span>
+        </div>
+      )}
 
       {toast && (
         <div className="pointer-events-none fixed bottom-28 left-1/2 -translate-x-1/2 z-40 bg-black/75 text-white px-5 py-2 rounded-full text-sm font-bold tracking-wider border border-white/20 shadow-lg">
@@ -605,6 +644,7 @@ function GameScene({
             <div className="mt-4 text-white/80">
               {gameResult === "hider" ? "끝까지 살아남았다!" : "전원 검거 완료!"}
             </div>
+            <div className="mt-2 text-sm text-white/50">잠시 후 자동으로 대기실로 이동합니다...</div>
             <div className="mt-8">
               <Link to="/room/$code" params={{ code: room.code }}>
                 <Button size="lg" className="tracking-widest">대기실로 돌아가기</Button>
@@ -868,12 +908,13 @@ function PlayerBody({
 // -----------------------------------------------------------------------------
 
 function SelfBody({
-  selfAnim, textures, paintMode, onPaint,
+  selfAnim, textures, paintMode, onPaint, paintingActive,
 }: {
   selfAnim: React.MutableRefObject<SelfAnim>;
   textures: PaintTextures;
   paintMode: boolean;
   onPaint: (part: BodyPart, x: number, y: number, from?: { x: number; y: number }) => void;
+  paintingActive: React.MutableRefObject<boolean>;
 }) {
   const group = useRef<THREE.Group>(null);
   const drawingRef = useRef(false);
@@ -891,10 +932,10 @@ function SelfBody({
   });
 
   useEffect(() => {
-    const up = () => { drawingRef.current = false; };
+    const up = () => { drawingRef.current = false; paintingActive.current = false; };
     window.addEventListener("pointerup", up);
     return () => window.removeEventListener("pointerup", up);
-  }, []);
+  }, [paintingActive]);
 
   const paintFactory = useCallback((part: BodyPart) => {
     const handle = (e: ThreeEvent<PointerEvent>) => {
@@ -906,10 +947,12 @@ function SelfBody({
       e.stopPropagation();
       if (e.type === "pointerdown") {
         drawingRef.current = true;
+        paintingActive.current = true;
         lastRef.current[part] = null;
       }
       if (e.type === "pointerup" || e.type === "pointerleave") {
         drawingRef.current = false;
+        paintingActive.current = false;
         lastRef.current[part] = null;
         return;
       }
@@ -954,6 +997,7 @@ const UP = new THREE.Vector3(0, 1, 0);
 function LocalPlayer({
   spawn, walls, props, floorSize, sendState, paintMode, touchInput, isMobile,
   frozen, caught, isSeeker, selfAnim, onEyedrop, onFill, onWhistle, onToast,
+  pickMode, setPickMode, paintingActive,
 }: {
   spawn: [number, number, number];
   walls: WallBox[]; props: Prop[]; floorSize: [number, number];
@@ -969,6 +1013,9 @@ function LocalPlayer({
   onFill: () => void;
   onWhistle: () => void;
   onToast: (msg: string) => void;
+  pickMode: boolean;
+  setPickMode: (v: boolean) => void;
+  paintingActive: React.MutableRefObject<boolean>;
 }) {
   const { camera, scene } = useThree();
   const posRef = useRef(new THREE.Vector3(spawn[0], spawn[1], spawn[2]));
@@ -990,8 +1037,10 @@ function LocalPlayer({
   caughtRef.current = caught;
   const paintModeRef = useRef(paintMode);
   paintModeRef.current = paintMode;
+  const pickModeRef = useRef(pickMode);
+  pickModeRef.current = pickMode;
 
-  const paintAngle = useRef({ yaw: 0, dist: 3.2 });
+  const paintAngle = useRef({ yaw: 0, pitch: 0.15, dist: 3.2 });
 
   const colliders = useMemo(() => {
     const list: WallBox[] = walls.filter((w) => !w.noCollide);
@@ -1014,15 +1063,38 @@ function LocalPlayer({
     camera.position.set(fx, spawn[1], fz);
   }, [camera, spawn, colliders, floorSize]);
 
-  // Paint mode: right-drag orbits around your body
+  // 그리기 모드: 몸 밖 드래그(또는 우클릭 드래그)로 카메라 회전 — 상하좌우 모두
   useEffect(() => {
     if (!paintMode) return;
-    const onMove = (e: PointerEvent) => {
-      if (e.buttons & 2) paintAngle.current.yaw += e.movementX * 0.008;
+    let last: { x: number; y: number } | null = null;
+    const rotate = (dx: number, dy: number) => {
+      paintAngle.current.yaw += dx * 0.008;
+      paintAngle.current.pitch = Math.max(-0.4, Math.min(1.25, paintAngle.current.pitch + dy * 0.006));
     };
-    window.addEventListener("pointermove", onMove);
-    return () => window.removeEventListener("pointermove", onMove);
-  }, [paintMode]);
+    const down = (e: PointerEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (!el || el.tagName !== "CANVAS") return;
+      last = { x: e.clientX, y: e.clientY };
+    };
+    const move = (e: PointerEvent) => {
+      if (!last) return;
+      const dx = e.clientX - last.x, dy = e.clientY - last.y;
+      last = { x: e.clientX, y: e.clientY };
+      if (paintingActive.current && !(e.buttons & 2)) return; // 몸에 그리는 중엔 회전 안 함
+      rotate(dx, dy);
+    };
+    const up = () => { last = null; };
+    window.addEventListener("pointerdown", down);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => {
+      window.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+  }, [paintMode, paintingActive]);
 
   // Right-click = rotation freeze (real meccha trick: body stays put while you look around)
   useEffect(() => {
@@ -1045,18 +1117,35 @@ function LocalPlayer({
 
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
 
+  // E = 스포이드 모드: 마우스가 풀리고, 클릭/터치한 바로 그 지점의 색을 딴다
   const eyedrop = useCallback(() => {
     if (caughtRef.current || paintModeRef.current) return;
-    // ray straight through the crosshair dot — samples EXACTLY what the circle points at
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    raycaster.far = 40;
-    const hits = raycaster.intersectObjects(scene.children, true);
-    for (const h of hits) {
-      if (chainHas(h.object, "noRay")) continue;
-      const color = sampleHitColor(h);
-      if (color) { onEyedrop(color); return; }
-    }
-  }, [camera, scene, raycaster, onEyedrop]);
+    if (pickModeRef.current) { setPickMode(false); return; }
+    setPickMode(true);
+    if (document.pointerLockElement) document.exitPointerLock();
+  }, [setPickMode]);
+
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      if (!pickModeRef.current) return;
+      const el = e.target as HTMLElement | null;
+      if (!el || el.tagName !== "CANVAS") return; // 버튼/조이스틱 터치는 무시
+      const ndc = new THREE.Vector2(
+        (e.clientX / window.innerWidth) * 2 - 1,
+        -(e.clientY / window.innerHeight) * 2 + 1,
+      );
+      raycaster.setFromCamera(ndc, camera);
+      raycaster.far = 80;
+      for (const h of raycaster.intersectObjects(scene.children, true)) {
+        if (chainHas(h.object, "noRay")) continue;
+        const color = sampleHitColor(h);
+        if (color) { onEyedrop(color); break; }
+      }
+      setPickMode(false);
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, [camera, scene, raycaster, onEyedrop, setPickMode]);
 
   const toggleStick = useCallback(() => {
     if (frozenRef.current || paintModeRef.current || caughtRef.current) return;
@@ -1193,12 +1282,12 @@ function LocalPlayer({
 
     // Paint mode: camera orbits your body
     if (paintMode) {
-      const yaw = paintAngle.current.yaw;
-      const dist = paintAngle.current.dist;
+      const { yaw, pitch, dist } = paintAngle.current;
+      const cp = Math.cos(pitch);
       camera.position.set(
-        p.x + Math.sin(yaw) * dist,
-        p.y + 0.4,
-        p.z + Math.cos(yaw) * dist,
+        p.x + Math.sin(yaw) * cp * dist,
+        p.y + 0.4 + Math.sin(pitch) * dist,
+        p.z + Math.cos(yaw) * cp * dist,
       );
       camera.lookAt(p.x, p.y - 0.2, p.z);
       const bodyYaw = stuckRef.current ? stuckYawRef.current : yawRef.current;
