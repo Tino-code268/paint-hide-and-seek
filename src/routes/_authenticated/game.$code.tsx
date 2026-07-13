@@ -267,7 +267,7 @@ function GameScene({
   const spawn = mapDef.spawnPoints[me.spawnIndex % mapDef.spawnPoints.length];
 
   const navigate = useNavigate();
-  const [pickMode, setPickMode] = useState(false);
+  const [pickMode, setPickMode] = useState<null | "pick" | "fill">(null);
   const paintingActive = useRef(false); // 지금 몸에 그리는 중인지 (카메라 회전과 구분)
 
   // 첫 터치/클릭에 전체 화면 진입 (모바일 주소창·화면 당김 방지)
@@ -426,7 +426,7 @@ function GameScene({
   // P toggles paint mode (hiders only)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === "KeyP" && !isSeeker) { e.preventDefault(); setPaintMode((m) => !m); }
+      if (e.code === "KeyP") { e.preventDefault(); setPaintMode((m) => !m); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -471,9 +471,9 @@ function GameScene({
     showToast(`🎨 색 추출!`);
   }, [showToast]);
 
-  const fillSelf = useCallback(() => {
+  const fillSelf = useCallback((pickedColor?: string) => {
     const entry = getOrCreatePaint(selfUserId);
-    const color = bodyColorRef.current;
+    const color = pickedColor ?? bodyColorRef.current;
     for (const part of BODY_PARTS) {
       const stroke: PaintStroke = { userId: selfUserId, part, x: 0, y: 0, size: 0, color, fill: true };
       entry.strokes.push(stroke);
@@ -539,7 +539,7 @@ function GameScene({
           whistlesRef={whistlesRef}
         />
 
-        {!isSeeker && (
+        {(!isSeeker || paintMode) && (
           <SelfBody
             selfAnim={selfAnim}
             textures={getOrCreatePaint(selfUserId).textures}
@@ -572,7 +572,7 @@ function GameScene({
         />
 
         <SeekerGun
-          visible={isSeeker}
+          visible={isSeeker && !paintMode}
           enabled={canShoot}
           touchInput={touchInput}
           onFire={handleFire}
@@ -598,11 +598,12 @@ function GameScene({
         onSchemeChange={setScheme}
         bodyColor={bodyColor}
         isSeeker={isSeeker}
+        picking={pickMode !== null}
       />
 
       {pickMode && (
         <div className="pointer-events-none fixed top-24 left-1/2 -translate-x-1/2 z-40 bg-black/80 text-white px-5 py-2 rounded-full text-sm font-bold border border-[#3ad0ff] shadow-lg">
-          🎨 색을 딸 곳을 클릭/터치! <span className="text-white/50">(E로 취소)</span>
+          {pickMode === "fill" ? "🖌️ 몸을 칠할 색을 클릭/터치!" : "🎨 색을 딸 곳을 클릭/터치!"} <span className="text-white/50">(같은 키로 취소)</span>
         </div>
       )}
 
@@ -874,7 +875,7 @@ function PlayerBody({
       </mesh>
       {/* arms (pivot at shoulder; shoulder ball bridges arm & torso) */}
       <group ref={armLg} position={[-0.35, 1.42, 0]} rotation={[0, 0, 0.07]}>
-        <mesh castShadow>
+        <mesh castShadow {...h("armL")}>
           <sphereGeometry args={[0.15, 14, 12]} />
           <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={1} />
         </mesh>
@@ -884,7 +885,7 @@ function PlayerBody({
         </mesh>
       </group>
       <group ref={armRg} position={[0.35, 1.42, 0]} rotation={[0, 0, -0.07]}>
-        <mesh castShadow>
+        <mesh castShadow {...h("armR")}>
           <sphereGeometry args={[0.15, 14, 12]} />
           <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={1} />
         </mesh>
@@ -929,6 +930,7 @@ function SelfBody({
 }) {
   const group = useRef<THREE.Group>(null);
   const drawingRef = useRef(false);
+  const activePartRef = useRef<BodyPart | null>(null); // 스트로크를 시작한 부위에만 칠한다
   const lastRef = useRef<Record<BodyPart, { x: number; y: number } | null>>({
     head: null, torso: null, armL: null, armR: null, legL: null, legR: null,
   });
@@ -943,7 +945,7 @@ function SelfBody({
   });
 
   useEffect(() => {
-    const up = () => { drawingRef.current = false; paintingActive.current = false; };
+    const up = () => { drawingRef.current = false; paintingActive.current = false; activePartRef.current = null; };
     window.addEventListener("pointerup", up);
     return () => window.removeEventListener("pointerup", up);
   }, [paintingActive]);
@@ -959,15 +961,19 @@ function SelfBody({
       if (e.type === "pointerdown") {
         drawingRef.current = true;
         paintingActive.current = true;
+        activePartRef.current = part;
         lastRef.current[part] = null;
       }
       if (e.type === "pointerup" || e.type === "pointerleave") {
         drawingRef.current = false;
         paintingActive.current = false;
+        activePartRef.current = null;
         lastRef.current[part] = null;
         return;
       }
       if (e.type === "pointermove" && !drawingRef.current) return;
+      // 드래그가 다른 부위 위를 지나가도 번지지 않게!
+      if (e.type === "pointermove" && activePartRef.current !== part) return;
       const x = e.uv.x * CANVAS_SIZE;
       const y = (1 - e.uv.y) * CANVAS_SIZE;
       const from = lastRef.current[part] ?? undefined;
@@ -1021,11 +1027,11 @@ function LocalPlayer({
   isSeeker: boolean;
   selfAnim: React.MutableRefObject<SelfAnim>;
   onEyedrop: (color: string) => void;
-  onFill: () => void;
+  onFill: (color?: string) => void;
   onWhistle: () => void;
   onToast: (msg: string) => void;
-  pickMode: boolean;
-  setPickMode: (v: boolean) => void;
+  pickMode: null | "pick" | "fill";
+  setPickMode: (v: null | "pick" | "fill") => void;
   paintingActive: React.MutableRefObject<boolean>;
 }) {
   const { camera, scene } = useThree();
@@ -1128,11 +1134,18 @@ function LocalPlayer({
 
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
 
-  // E = 스포이드 모드: 마우스가 풀리고, 클릭/터치한 바로 그 지점의 색을 딴다
+  // E = 스포이드 모드 / F = 칠하기 모드: 마우스가 풀리고, 클릭한 지점의 색으로 동작
   const eyedrop = useCallback(() => {
     if (caughtRef.current || paintModeRef.current) return;
-    if (pickModeRef.current) { setPickMode(false); return; }
-    setPickMode(true);
+    if (pickModeRef.current) { setPickMode(null); return; }
+    setPickMode("pick");
+    if (document.pointerLockElement) document.exitPointerLock();
+  }, [setPickMode]);
+
+  const enterFill = useCallback(() => {
+    if (caughtRef.current || paintModeRef.current) return;
+    if (pickModeRef.current) { setPickMode(null); return; }
+    setPickMode("fill");
     if (document.pointerLockElement) document.exitPointerLock();
   }, [setPickMode]);
 
@@ -1150,13 +1163,17 @@ function LocalPlayer({
       for (const h of raycaster.intersectObjects(scene.children, true)) {
         if (chainHas(h.object, "noRay")) continue;
         const color = sampleHitColor(h);
-        if (color) { onEyedrop(color); break; }
+        if (color) {
+          onEyedrop(color);
+          if (pickModeRef.current === "fill") onFill(color); // 그 색으로 몸 전체 칠하기!
+          break;
+        }
       }
-      setPickMode(false);
+      setPickMode(null);
     };
     window.addEventListener("pointerdown", onDown);
     return () => window.removeEventListener("pointerdown", onDown);
-  }, [camera, scene, raycaster, onEyedrop, setPickMode]);
+  }, [camera, scene, raycaster, onEyedrop, onFill, setPickMode]);
 
   const toggleStick = useCallback(() => {
     if (frozenRef.current || paintModeRef.current || caughtRef.current) return;
@@ -1223,15 +1240,15 @@ function LocalPlayer({
     onToast(`포즈: ${POSE_NAMES[poseRef.current]}`);
   }, [onToast]);
 
-  const actionsRef = useRef({ eyedrop, toggleStick, onFill, onWhistle, cyclePose });
-  actionsRef.current = { eyedrop, toggleStick, onFill, onWhistle, cyclePose };
+  const actionsRef = useRef({ eyedrop, enterFill, toggleStick, onWhistle, cyclePose });
+  actionsRef.current = { eyedrop, enterFill, toggleStick, onWhistle, cyclePose };
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       keys.current[e.code] = true;
       if (e.repeat || isSeeker) return;
       if (e.code === "KeyE") actionsRef.current.eyedrop();
-      if (e.code === "KeyF" && !caughtRef.current && !paintModeRef.current) actionsRef.current.onFill();
+      if (e.code === "KeyF") actionsRef.current.enterFill();
       if (e.code === "KeyQ") actionsRef.current.toggleStick();
       if (e.code === "KeyR") actionsRef.current.cyclePose();
       if (e.code === "Digit1" && !caughtRef.current) actionsRef.current.onWhistle();
@@ -1277,8 +1294,8 @@ function LocalPlayer({
     a.moving = moving;
     a.pose = poseRef.current;
     a.flat = stuckRef.current;
-    // 잡히면(관전) 내 몸도 화면에서 사라진다
-    a.visible = !isSeeker && !caughtRef.current;
+    // 잡히면(관전) 내 몸은 숨김 · 술래는 그리기 모드에서만 자기 몸이 보임
+    a.visible = (!isSeeker || paintModeRef.current) && !caughtRef.current;
   }, [selfAnim, isSeeker]);
 
   useFrame((_, dtRaw) => {
@@ -1287,7 +1304,7 @@ function LocalPlayer({
     const ti = touchInput.current;
 
     if (ti.pick) { ti.pick = false; actionsRef.current.eyedrop(); }
-    if (ti.fill) { ti.fill = false; if (!caughtRef.current && !paintModeRef.current) actionsRef.current.onFill(); }
+    if (ti.fill) { ti.fill = false; actionsRef.current.enterFill(); }
     if (ti.whistle) { ti.whistle = false; if (!caughtRef.current) actionsRef.current.onWhistle(); }
     if (ti.stick) { ti.stick = false; actionsRef.current.toggleStick(); }
 
@@ -1708,13 +1725,13 @@ function PersonIcon({ c }: { c: string }) {
 }
 
 function Hud({
-  code, role, username, alive, total, seekers, locked, paintMode, phase, remaining, scheme, onSchemeChange, bodyColor, isSeeker,
+  code, role, username, alive, total, seekers, locked, paintMode, phase, remaining, scheme, onSchemeChange, bodyColor, isSeeker, picking,
 }: {
   code: string; role: "hider" | "seeker" | null; username: string;
   alive: number; total: number; seekers: number;
   locked: boolean; paintMode: boolean; phase: Phase; remaining: number;
   scheme: ControlScheme; onSchemeChange: (s: ControlScheme) => void;
-  bodyColor: string; isSeeker: boolean;
+  bodyColor: string; isSeeker: boolean; picking: boolean;
 }) {
   const roleColor = role === "seeker" ? "text-[#ff3860]" : role === "hider" ? "text-[#3ad0ff]" : "text-muted-foreground";
   const roleLabel = role === "seeker" ? "헌터" : role === "hider" ? "카멜레온" : "관전";
@@ -1788,14 +1805,14 @@ function Hud({
         </div>
       )}
 
-      {!locked && !paintMode && scheme === "pc" && (
+      {!locked && !paintMode && !picking && scheme === "pc" && (
         <div className="pointer-events-none fixed inset-0 flex items-center justify-center">
           <div className="bg-black/70 backdrop-blur px-6 py-4 rounded border border-white/10 text-center text-white">
             <div className="text-lg font-bold tracking-widest">클릭해서 시작</div>
             <div className="mt-2 text-xs text-white/70 leading-relaxed">
               WASD 이동 · Shift 달리기 · Space 점프 · C 앉기<br/>
               {isSeeker
-                ? <span className="text-[#ff3860]">좌클릭 — 페인트 샷건 발사!</span>
+                ? <><span className="text-[#ff3860]">좌클릭 — 페인트 샷건 발사!</span> · <span className="text-[#3ad0ff]">P</span> 내 몸 그리기</>
                 : <>
                     <span className="text-[#3ad0ff]">E</span> 색 추출 · <span className="text-[#3ad0ff]">F</span> 몸 전체 칠하기 · <span className="text-[#3ad0ff]">P</span> 정밀 그리기<br/>
                     <span className="text-[#f4ec3a]">Q</span> 벽·바닥 붙기 · <span className="text-[#f4ec3a]">R</span> 포즈 · <span className="text-[#f4ec3a]">우클릭(꾹)</span> 몸 회전 고정 · <span className="text-[#f4ec3a]">1</span> 휘파람
@@ -1921,10 +1938,8 @@ function TouchControls({
           <button onTouchStart={() => { touchInput.current.crouch = true; }} onTouchEnd={() => { touchInput.current.crouch = false; }}
             className="w-14 h-14 rounded-full bg-white/20 border border-white/40 text-white text-[10px] font-bold backdrop-blur touch-none">앉기</button>
         </div>
-        {!isSeeker && (
-          <button onClick={onPaint}
-            className="w-14 h-14 rounded-full bg-primary text-primary-foreground text-[10px] font-bold shadow-lg touch-none">그리기</button>
-        )}
+        <button onClick={onPaint}
+          className="w-14 h-14 rounded-full bg-primary text-primary-foreground text-[10px] font-bold shadow-lg touch-none">그리기</button>
       </div>
     </>
   );
