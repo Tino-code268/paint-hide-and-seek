@@ -47,8 +47,8 @@ function Room() {
     const rows = (data ?? []) as PlayerRow[];
     if (rows.length) {
       const ids = rows.map((r) => r.user_id);
-      const { data: profs } = await supabase.from("profiles").select("id, username").in("id", ids);
-      const map = new Map((profs ?? []).map((p) => [p.id, p.username]));
+      const { data: profs } = await supabase.from("profiles").select("id, username, nickname").in("id", ids);
+      const map = new Map((profs ?? []).map((p) => [p.id, (p as { nickname?: string; username: string }).nickname ?? p.username]));
       rows.forEach((r) => { r.username = map.get(r.user_id) ?? r.user_id.slice(0, 6); });
     }
     setPlayers(rows);

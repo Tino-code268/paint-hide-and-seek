@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
-import { isValidUsername, signInWithUsername, signUpWithUsername } from "@/lib/auth-helpers";
+import { isValidNickname, isValidUsername, signInWithUsername, signUpWithUsername } from "@/lib/auth-helpers";
 
 export const Route = createFileRoute("/auth")({
   component: AuthPage,
@@ -43,11 +43,13 @@ function AuthPage() {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const username = String(form.get("username") || "");
+    const nickname = String(form.get("nickname") || "");
     const password = String(form.get("password") || "");
-    if (!isValidUsername(username)) return toast.error("아이디는 2~20자, 영문/숫자/한글/_ 만");
+    if (!isValidUsername(username)) return toast.error("아이디는 2~20자, 영문/숫자/_ 만");
+    if (!isValidNickname(nickname)) return toast.error("닉네임은 2~16자, 한글/영문/숫자/_/공백");
     if (password.length < 6) return toast.error("비밀번호는 6자 이상이어야 합니다");
     setLoading(true);
-    const { error } = await signUpWithUsername(username, password);
+    const { error } = await signUpWithUsername(username, password, nickname);
     setLoading(false);
     if (error) {
       const msg = error.message.toLowerCase().includes("registered") || error.message.toLowerCase().includes("exists")
@@ -93,8 +95,12 @@ function AuthPage() {
               <TabsContent value="signup">
                 <form className="space-y-4 mt-4" onSubmit={handleSignUp}>
                   <div className="space-y-2">
-                    <Label htmlFor="signup-username">아이디 (2~20자)</Label>
-                    <Input id="signup-username" name="username" required autoComplete="username" />
+                    <Label htmlFor="signup-username">아이디 (영문/숫자/_ , 2~20자)</Label>
+                    <Input id="signup-username" name="username" required autoComplete="username" placeholder="myid_01" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="signup-nickname">닉네임 (한글 가능, 2~16자)</Label>
+                    <Input id="signup-nickname" name="nickname" required autoComplete="nickname" placeholder="카멜레온" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="signup-password">비밀번호 (6자 이상)</Label>
