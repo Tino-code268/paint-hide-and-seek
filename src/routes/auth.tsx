@@ -43,11 +43,13 @@ function AuthPage() {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const username = String(form.get("username") || "");
+    const nickname = String(form.get("nickname") || "");
     const password = String(form.get("password") || "");
-    if (!isValidUsername(username)) return toast.error("아이디는 2~20자, 영문/숫자/한글/_ 만");
+    if (!isValidUsername(username)) return toast.error("아이디는 2~20자, 영문/숫자/_ 만");
+    if (!isValidNickname(nickname)) return toast.error("닉네임은 2~16자, 한글/영문/숫자/_/공백");
     if (password.length < 6) return toast.error("비밀번호는 6자 이상이어야 합니다");
     setLoading(true);
-    const { error } = await signUpWithUsername(username, password);
+    const { error } = await signUpWithUsername(username, password, nickname);
     setLoading(false);
     if (error) {
       const msg = error.message.toLowerCase().includes("registered") || error.message.toLowerCase().includes("exists")
