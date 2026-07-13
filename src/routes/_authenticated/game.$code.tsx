@@ -70,7 +70,7 @@ function GameRoute() {
 
       setMe({
         role: mineIdx === seekerIdx ? "seeker" : "hider",
-        username: prof?.username ?? "player",
+        username: (prof as { nickname?: string; username?: string } | null)?.nickname ?? prof?.username ?? "player",
         spawnIndex: mineIdx >= 0 ? mineIdx : 0,
       });
     })();
