@@ -4,7 +4,9 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
+import { MAP_LIST, parseRoomConfig, encodeRoomConfig, MAPS } from "@/game/maps";
 
 export const Route = createFileRoute("/_authenticated/room/$code")({
   component: Room,
@@ -47,8 +49,8 @@ function Room() {
     const rows = (data ?? []) as PlayerRow[];
     if (rows.length) {
       const ids = rows.map((r) => r.user_id);
-      const { data: profs } = await supabase.from("profiles").select("id, username, nickname").in("id", ids);
-      const map = new Map((profs ?? []).map((p) => [p.id, (p as { nickname?: string; username: string }).nickname ?? p.username]));
+      const { data: profs } = await supabase.from("profiles").select("id, username").in("id", ids);
+      const map = new Map((profs ?? []).map((p) => [p.id, p.username]));
       rows.forEach((r) => { r.username = map.get(r.user_id) ?? r.user_id.slice(0, 6); });
     }
     setPlayers(rows);
@@ -129,6 +131,13 @@ function Room() {
   const me = players.find((p) => p.user_id === user.id);
   const allReady = players.length >= 2 && players.every((p) => p.is_ready);
 
+  const cfg = parseRoomConfig(room.map_name);
+  const updateCfg = async (patch: Partial<ReturnType<typeof parseRoomConfig>>) => {
+    if (!isHost) return;
+    const next = { ...cfg, ...patch };
+    await supabase.from("rooms").update({ map_name: encodeRoomConfig(next) }).eq("id", room.id);
+  };
+
   const toggleReady = async () => {
     if (!me) return;
     await supabase.from("room_players").update({ is_ready: !me.is_ready }).eq("id", me.id);
@@ -149,13 +158,7 @@ function Room() {
     if (players.length < 2) return toast.error("최소 2명이 필요합니다");
     if (!allReady) return toast.error("모든 플레이어가 준비되어야 합니다");
 
-    // Randomly pick seeker
-    const seekerIdx = Math.floor(Math.random() * players.length);
-    for (let i = 0; i < players.length; i++) {
-      await supabase.from("room_players")
-        .update({ role: i === seekerIdx ? "seeker" : "hider" })
-        .eq("id", players[i].id);
-    }
+    // 역할은 게임 화면에서 시드 기반으로 모두가 똑같이 계산한다 (설정된 헌터 수만큼)
     const { error } = await supabase.from("rooms")
       .update({ status: "playing", started_at: new Date().toISOString() })
       .eq("id", room.id);
@@ -222,6 +225,60 @@ function Room() {
                   게임 시작 {!allReady && "(전원 준비 필요)"}
                 </Button>
               )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mt-6 bg-card/70 border-border/60">
+          <CardHeader>
+            <CardTitle className="text-base">게임 설정 {!isHost && <span className="text-xs text-muted-foreground font-normal">(방장만 변경 가능)</span>}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">맵</div>
+                {isHost ? (
+                  <Select value={cfg.map} onValueChange={(v) => updateCfg({ map: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MAP_LIST.map((m) => <SelectItem key={m.name} value={m.name}>{m.displayName}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                ) : <div className="font-semibold">{MAPS[cfg.map]?.displayName ?? cfg.map}</div>}
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">숨는 시간</div>
+                {isHost ? (
+                  <Select value={String(cfg.hide)} onValueChange={(v) => updateCfg({ hide: Number(v) })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {[30, 60, 90, 120, 180].map((n) => <SelectItem key={n} value={String(n)}>{n}초</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                ) : <div className="font-semibold">{cfg.hide}초</div>}
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">찾는 시간</div>
+                {isHost ? (
+                  <Select value={String(cfg.seek)} onValueChange={(v) => updateCfg({ seek: Number(v) })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {[120, 180, 300, 400, 600].map((n) => <SelectItem key={n} value={String(n)}>{n}초</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                ) : <div className="font-semibold">{cfg.seek}초</div>}
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">헌터 수</div>
+                {isHost ? (
+                  <Select value={String(cfg.seekers)} onValueChange={(v) => updateCfg({ seekers: Number(v) })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {[1, 2, 3, 4, 5].map((n) => <SelectItem key={n} value={String(n)}>{n}명</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                ) : <div className="font-semibold">{cfg.seekers}명</div>}
+              </div>
             </div>
           </CardContent>
         </Card>

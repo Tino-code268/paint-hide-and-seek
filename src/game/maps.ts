@@ -939,19 +939,185 @@ function makeFarm(): MapDef {
   };
 }
 
+
+// =============================================================================
+// MAP 5 — 마인크래프트 (blocky voxel world, 130 x 110) — 구조물 가득!
+// =============================================================================
+
+const B = 1.4; // 블록 한 칸 (점프로 한 칸 오를 수 있는 크기)
+
+function mcBlock(walls: WallBox[], gx: number, level: number, gz: number, tex: string, w = 1, h = 1, d = 1) {
+  walls.push({
+    pos: [gx * B, level * B + (h * B) / 2, gz * B],
+    size: [w * B, h * B, d * B],
+    tex, texRepeat: [Math.max(1, w), Math.max(1, h)],
+  });
+}
+
+function mcTree(walls: WallBox[], gx: number, gz: number, birch = false) {
+  const log = birch ? "mcPlank" : "mcLog";
+  mcBlock(walls, gx, 0, gz, log, 1, 3, 1);
+  mcBlock(walls, gx, 3, gz, "mcLeaf", 4, 1, 4);
+  mcBlock(walls, gx, 4, gz, "mcLeaf", 3, 1, 3);
+  mcBlock(walls, gx, 5, gz, "mcLeaf", 1, 1, 1);
+}
+
+function mcCreeperStatue(walls: WallBox[], gx: number, gz: number) {
+  mcBlock(walls, gx, 0, gz, "mcCreeper", 1, 1, 0.7);
+  mcBlock(walls, gx, 1, gz, "mcCreeper", 1, 2, 0.7);
+  mcBlock(walls, gx, 3, gz, "mcCreeper", 1, 1, 1);
+}
+
+function makeMinecraft(): MapDef {
+  const W = 130, D = 110;
+  const walls: WallBox[] = [];
+  const propsArr: Prop[] = [];
+
+  // 돌담 울타리 (테두리)
+  walls.push({ pos: [0, 2.1, -D / 2 + 0.7], size: [W, 4.2, 1.4], tex: "mcStone", texRepeat: [46, 3] });
+  walls.push({ pos: [0, 2.1, D / 2 - 0.7], size: [W, 4.2, 1.4], tex: "mcStone", texRepeat: [46, 3] });
+  walls.push({ pos: [-W / 2 + 0.7, 2.1, 0], size: [1.4, 4.2, D], tex: "mcStone", texRepeat: [39, 3] });
+  walls.push({ pos: [W / 2 - 0.7, 2.1, 0], size: [1.4, 4.2, D], tex: "mcStone", texRepeat: [39, 3] });
+
+  // ---------- 나무집 (내부 들어갈 수 있음) ----------
+  // 벽 (문 2개: 남쪽 가운데, 동쪽)
+  walls.push({ pos: [-30, 2.1, -32.2], size: [14, 4.2, 1.0], tex: "mcPlank", texRepeat: [10, 3] }); // 북벽
+  walls.push({ pos: [-35.5, 2.1, -25.2], size: [3, 4.2, 1.0], tex: "mcPlank", texRepeat: [2, 3] });  // 남벽 왼쪽
+  walls.push({ pos: [-24.5, 2.1, -25.2], size: [3, 4.2, 1.0], tex: "mcPlank", texRepeat: [2, 3] });  // 남벽 오른쪽 (가운데 문)
+  walls.push({ pos: [-30, 3.5, -25.2], size: [14, 1.4, 1.0], tex: "mcPlank", texRepeat: [10, 1] });  // 남벽 상단
+  walls.push({ pos: [-36.5, 2.1, -28.7], size: [1.0, 4.2, 8], tex: "mcPlank", texRepeat: [6, 3] });  // 서벽
+  walls.push({ pos: [-23.5, 2.1, -30.5], size: [1.0, 4.2, 4.5], tex: "mcPlank", texRepeat: [3, 3] }); // 동벽 위
+  walls.push({ pos: [-23.5, 3.5, -27], size: [1.0, 1.4, 3], tex: "mcPlank", texRepeat: [2, 1] });     // 동벽 문 상단
+  // 창문 (유리)
+  walls.push({ pos: [-33, 2.5, -32.0], size: [2.4, 1.6, 0.1], color: "#bfe4f2", glow: true, noTex: true, noCollide: true });
+  walls.push({ pos: [-27, 2.5, -32.0], size: [2.4, 1.6, 0.1], color: "#bfe4f2", glow: true, noTex: true, noCollide: true });
+  // 지붕
+  walls.push({ pos: [-30, 4.55, -28.7], size: [15.4, 0.7, 9.4], tex: "mcLog", texRepeat: [11, 1] });
+  // 내부 가구: 화로 + 작업대 + 침대 + 상자
+  walls.push({ pos: [-34.5, 0.7, -30.5], size: [1.4, 1.4, 1.4], tex: "mcStone", texRepeat: [1, 1] });   // 화로
+  walls.push({ pos: [-32, 0.7, -30.5], size: [1.4, 1.4, 1.4], tex: "mcPlank", texRepeat: [1, 1] });     // 작업대
+  walls.push({ pos: [-27, 0.45, -30], size: [1.4, 0.9, 2.6], color: "#c23a3a", noTex: true });          // 빨간 침대
+  walls.push({ pos: [-27, 0.6, -28.5], size: [1.4, 0.5, 0.8], color: "#f0f0e8", noTex: true, noCollide: true }); // 베개
+  walls.push({ pos: [-34.5, 0.7, -26.8], size: [1.4, 1.4, 1.4], tex: "mcGold", texRepeat: [1, 1] });    // 보물상자(금)
+
+  // ---------- 잔디 언덕 (계단식 — 점프로 오를 수 있음!) ----------
+  walls.push({ pos: [34, 0.7, -30], size: [19.6, 1.4, 16.8], tex: "mcDirt", texRepeat: [14, 1] });
+  walls.push({ pos: [34, 2.1, -30], size: [14, 1.4, 11.2], tex: "mcDirt", texRepeat: [10, 1] });
+  walls.push({ pos: [34, 3.5, -30], size: [8.4, 1.4, 5.6], tex: "mcGrassTop", texRepeat: [6, 1] });
+  walls.push({ pos: [34, 1.43, -30], size: [19.7, 0.06, 16.9], tex: "mcGrassTop", texRepeat: [14, 14], noCollide: true });
+  walls.push({ pos: [34, 2.83, -30], size: [14.1, 0.06, 11.3], tex: "mcGrassTop", texRepeat: [10, 10], noCollide: true });
+  mcTree(walls, 34 / B, -30 / B); // 언덕 꼭대기 나무
+
+  // ---------- 동굴 언덕 (돌 + 입구 + 안에 다이아!) ----------
+  walls.push({ pos: [-38, 1.4, 28], size: [16.8, 2.8, 14], tex: "mcStone", texRepeat: [12, 2] });
+  walls.push({ pos: [-38, 3.5, 28], size: [11.2, 1.4, 9.8], tex: "mcStone", texRepeat: [8, 1] });
+  // 입구 (남쪽): 양옆 기둥 + 위 보 — 사이가 뚫린 통로
+  walls.push({ pos: [-41.5, 1.4, 36.4], size: [4.2, 2.8, 2.8], tex: "mcStone", texRepeat: [3, 2] });
+  walls.push({ pos: [-34.5, 1.4, 36.4], size: [4.2, 2.8, 2.8], tex: "mcStone", texRepeat: [3, 2] });
+  walls.push({ pos: [-38, 2.8, 36.4], size: [2.8, 0.7, 2.8], tex: "mcStone", texRepeat: [2, 1] });
+  // 동굴 속 (입구 안쪽 포켓): 어둠 + 광석
+  walls.push({ pos: [-38, 1.4, 33], size: [2.9, 2.8, 4], color: "#181818", noTex: true, noCollide: true });
+  walls.push({ pos: [-40.2, 0.7, 31.5], size: [1.4, 1.4, 1.4], tex: "mcDiamond", texRepeat: [1, 1] });
+  walls.push({ pos: [-35.8, 0.7, 30.8], size: [1.4, 1.4, 1.4], tex: "mcDiamond", texRepeat: [1, 1] });
+
+  // ---------- 네더 포탈 ----------
+  walls.push({ pos: [30, 2.8, 34], size: [1.4, 5.6, 1.4], tex: "mcObsidian", texRepeat: [1, 4] });
+  walls.push({ pos: [35.6, 2.8, 34], size: [1.4, 5.6, 1.4], tex: "mcObsidian", texRepeat: [1, 4] });
+  walls.push({ pos: [32.8, 5.25, 34], size: [7, 0.7, 1.4], tex: "mcObsidian", texRepeat: [5, 1] });
+  walls.push({ pos: [32.8, 0.35, 34], size: [7, 0.7, 1.4], tex: "mcObsidian", texRepeat: [5, 1] });
+  walls.push({ pos: [32.8, 2.8, 34], size: [4.2, 4.2, 0.3], tex: "mcPortal", glow: true, noCollide: true });
+
+  // ---------- 밀밭 + 물길 + 울타리 ----------
+  floorArea(walls, 8, 30, 18, 12, "mcDirt");
+  walls.push({ pos: [8, 0.05, 30], size: [1.4, 0.1, 11], tex: "mcWater", texRepeat: [1, 8], noCollide: true });
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) {
+    walls.push({ pos: [2.4 + r * 2.8 + (r > 0 ? 2.8 : 0), 0.45, 25.5 + c * 3], size: [1.4, 0.9, 1.4], tex: "mcWheat", texRepeat: [1, 1] });
+  }
+  for (let i = 0; i < 8; i++) {
+    propsArr.push({ kind: "cylinder", pos: [-1 + i * 2.6, 0.6, 23.4], radiusTop: 0.09, radiusBottom: 0.09, height: 1.2, color: "#7a5a34", collides: true });
+  }
+
+  // ---------- 크리퍼 석상 2개 ----------
+  mcCreeperStatue(walls, -8, -8);
+  mcCreeperStatue(walls, 12, 8);
+
+  // ---------- 나무들 ----------
+  for (const [tx, tz, birch] of [[-40, -6, false], [-16, 20, false], [20, -14, false], [42, 10, false], [-20, -40, true], [4, -30, false], [44, 30, true], [-44, 12, false], [16, 38, false], [40, -8, true]] as [number, number, boolean][]) {
+    mcTree(walls, Math.round(tx / B), Math.round(tz / B), birch);
+  }
+
+  // ---------- 흩어진 블록들 (TNT·광석·돌) ----------
+  for (const [bx, bz, tex] of [
+    [-6, 34, "mcTNT"], [-4.6, 34, "mcTNT"], [-5.3, 35.4, "mcTNT"], [-5.3, 34.5, "mcTNT"],
+    [22, 22, "mcDiamond"], [-24, 6, "mcGold"], [46, -22, "mcGold"],
+    [-12, -22, "mcStone"], [6, -12, "mcStone"], [26, -2, "mcStone"], [-30, 14, "mcStone"],
+    [50, 20, "mcDirt"], [-50, -20, "mcDirt"],
+  ] as [number, number, string][]) {
+    walls.push({ pos: [bx, 0.7, bz], size: [1.4, 1.4, 1.4], tex, texRepeat: [1, 1] });
+  }
+  // TNT 더미 위층
+  walls.push({ pos: [-5.3, 2.1, 34.7], size: [1.4, 1.4, 1.4], tex: "mcTNT", texRepeat: [1, 1] });
+
+  // ---------- 조약돌 길 ----------
+  floorArea(walls, -14, -14, 6, 30, "mcPath");
+  floorArea(walls, 8, -6, 40, 6, "mcPath");
+
+  return {
+    name: "minecraft",
+    displayName: "마인크래프트",
+    floorSize: [W, D],
+    floorTex: "mcGrassTop",
+    floorColor: "#6cbb3c",
+    wallColor: "#8a8a8a",
+    ambientColor: "#ffffff",
+    skyColor: "#8ecdf2",
+    groundColor: "#4a8a3a",
+    fogNear: 90, fogFar: 280,
+    walls, props: propsArr,
+    spawnPoints: [
+      [-52, PLAYER_EYE, -44], [ 52, PLAYER_EYE, -44],
+      [-52, PLAYER_EYE,  44], [ 52, PLAYER_EYE,  44],
+      [  0, PLAYER_EYE, -46], [ -16, PLAYER_EYE,  44],
+      [-52, PLAYER_EYE,   0], [ 52, PLAYER_EYE,   0],
+      [  0, PLAYER_EYE,  12], [ 18, PLAYER_EYE, -34],
+    ],
+  };
+}
+
 const house = makeHouse();
 const restaurant = makeRestaurant();
 const arcade = makeArcade();
 const farm = makeFarm();
+const minecraft = makeMinecraft();
 
-export const MAPS: Record<string, MapDef> = { house, farm, restaurant, arcade };
-export const MAP_LIST = [house, farm, restaurant, arcade];
+export const MAPS: Record<string, MapDef> = { house, farm, minecraft, restaurant, arcade };
+export const MAP_LIST = [house, farm, minecraft, restaurant, arcade];
 
 // Legacy names from older rooms — alias to the new maps
 MAPS["warehouse"] = house;
 MAPS["office"] = house;
 MAPS["market"] = farm;
 MAPS["arena"] = arcade;
+
+
+// ---- 방 설정: map_name 컬럼에 "맵|h숨는초|s찾는초|k헌터수" 형태로 저장 ----
+export type RoomConfig = { map: string; hide: number; seek: number; seekers: number };
+
+export function parseRoomConfig(raw: string | null | undefined): RoomConfig {
+  const parts = (raw ?? "").split("|");
+  const map = parts[0] || "house";
+  let hide = 120, seek = 400, seekers = 1;
+  for (const p of parts.slice(1)) {
+    if (p.startsWith("h")) hide = parseInt(p.slice(1), 10) || 120;
+    else if (p.startsWith("s")) seek = parseInt(p.slice(1), 10) || 400;
+    else if (p.startsWith("k")) seekers = parseInt(p.slice(1), 10) || 1;
+  }
+  return { map, hide, seek, seekers };
+}
+
+export function encodeRoomConfig(c: RoomConfig): string {
+  return `${c.map}|h${c.hide}|s${c.seek}|k${c.seekers}`;
+}
 
 export const PLAYER_EYE_HEIGHT = PLAYER_EYE;
 export const PLAYER_CROUCH_HEIGHT = 1.0;

@@ -28,6 +28,14 @@ function frame(ctx: CanvasRenderingContext2D, s: number, color = "#3a2a1a", w = 
   ctx.strokeRect(w / 2, w / 2, s - w, s - w);
 }
 
+function mcNoise(ctx: CanvasRenderingContext2D, s: number, base: string, variance: number) {
+  const n = 16, c = s / n;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    ctx.fillStyle = shade(base, -variance + Math.floor(Math.random() * variance * 2));
+    ctx.fillRect(i * c, j * c, c, c);
+  }
+}
+
 const PAINTERS: Record<string, Painter> = {
   // ---------- floors ----------
   woodFloor(ctx, s) {
@@ -371,6 +379,87 @@ const PAINTERS: Record<string, Painter> = {
     ctx.fillStyle = "#f0c8c8";
     ctx.beginPath(); ctx.ellipse(s * 0.52, s * 0.62, s * 0.05, s * 0.035, 0, 0, Math.PI * 2); ctx.fill();
   },
+
+  // ---------- Minecraft-style pixel blocks ----------
+  mcGrassTop(ctx, s) { mcNoise(ctx, s, "#6cbb3c", 18); },
+  mcDirt(ctx, s) { mcNoise(ctx, s, "#8a5a32", 16); },
+  mcStone(ctx, s) { mcNoise(ctx, s, "#8a8a8a", 14); },
+  mcLeaf(ctx, s) {
+    mcNoise(ctx, s, "#3a8a28", 22);
+    const n = 16, c = s / n;
+    ctx.fillStyle = "rgba(20,50,12,0.8)";
+    for (let i = 0; i < 20; i++) ctx.fillRect(Math.floor(Math.random() * n) * c, Math.floor(Math.random() * n) * c, c, c);
+  },
+  mcLog(ctx, s) {
+    const n = 16, c = s / n;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const stripe = i % 4 < 2;
+      ctx.fillStyle = shade(stripe ? "#6a4a28" : "#7a5a34", -8 + Math.floor(Math.random() * 16));
+      ctx.fillRect(i * c, j * c, c, c);
+    }
+  },
+  mcPlank(ctx, s) {
+    const n = 16, c = s / n;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      ctx.fillStyle = shade("#b8905a", -8 + Math.floor(Math.random() * 16));
+      ctx.fillRect(i * c, j * c, c, c);
+    }
+    ctx.fillStyle = "rgba(90,60,30,0.9)";
+    for (let j = 0; j < n; j += 4) ctx.fillRect(0, j * c, s, 2);
+  },
+  mcTNT(ctx, s) {
+    mcNoise(ctx, s, "#c23a2a", 14);
+    ctx.fillStyle = "#e8e0d0"; ctx.fillRect(0, s * 0.38, s, s * 0.24);
+    ctx.fillStyle = "#1a1a1a"; ctx.textAlign = "center";
+    ctx.font = `bold ${Math.floor(s * 0.2)}px monospace`;
+    ctx.fillText("TNT", s / 2, s * 0.57);
+  },
+  mcDiamond(ctx, s) {
+    mcNoise(ctx, s, "#8a8a8a", 14);
+    const n = 16, c = s / n;
+    ctx.fillStyle = "#4adede";
+    for (const [i, j] of [[3, 3], [4, 3], [3, 4], [11, 5], [12, 5], [11, 6], [6, 11], [7, 11], [6, 12], [12, 12], [13, 12]]) {
+      ctx.fillRect(i * c, j * c, c, c);
+    }
+  },
+  mcGold(ctx, s) {
+    mcNoise(ctx, s, "#8a8a8a", 14);
+    const n = 16, c = s / n;
+    ctx.fillStyle = "#f4d24a";
+    for (const [i, j] of [[4, 4], [5, 4], [4, 5], [11, 3], [12, 3], [7, 10], [8, 10], [7, 11], [12, 12], [13, 12], [12, 13]]) {
+      ctx.fillRect(i * c, j * c, c, c);
+    }
+  },
+  mcObsidian(ctx, s) { mcNoise(ctx, s, "#241a34", 10); },
+  mcPortal(ctx, s) {
+    mcNoise(ctx, s, "#7a3ae8", 26);
+    ctx.strokeStyle = "#c8a0ff"; ctx.lineWidth = 4; ctx.globalAlpha = 0.7;
+    for (let i = 0; i < 6; i++) {
+      ctx.beginPath();
+      ctx.arc(s / 2, s / 2, s * 0.1 + i * s * 0.07, i, i + 4);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  },
+  mcCreeper(ctx, s) {
+    mcNoise(ctx, s, "#4ab83a", 20);
+    const n = 16, c = s / n;
+    ctx.fillStyle = "#0a1a08";
+    // eyes
+    for (const [i, j] of [[3, 4], [4, 4], [3, 5], [4, 5], [11, 4], [12, 4], [11, 5], [12, 5]]) ctx.fillRect(i * c, j * c, c, c);
+    // mouth
+    for (const [i, j] of [[6, 7], [7, 7], [8, 7], [9, 7], [6, 8], [7, 8], [8, 8], [9, 8], [5, 9], [6, 9], [9, 9], [10, 9], [5, 10], [10, 10]]) ctx.fillRect(i * c, j * c, c, c);
+  },
+  mcPath(ctx, s) { mcNoise(ctx, s, "#b89858", 14); },
+  mcWater(ctx, s) { mcNoise(ctx, s, "#3a6ae8", 16); },
+  mcWheat(ctx, s) {
+    mcNoise(ctx, s, "#8a5a32", 10);
+    const n = 16, c = s / n;
+    ctx.fillStyle = "#d8c84a";
+    for (let i = 1; i < n; i += 2) for (let j = 2; j < n; j += 3) {
+      ctx.fillRect(i * c, j * c, c, c * 2);
+    }
+  },
 };
 
 // ---------- posters (art to imitate!) ----------
@@ -525,6 +614,7 @@ export function getTex(name: string, repeatX = 1, repeatY = 1): THREE.Texture | 
   const tex = new THREE.CanvasTexture(cv);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(repeatX, repeatY);
+  if (name.startsWith("mc")) tex.magFilter = THREE.NearestFilter; // 픽셀 블록 유지
   tex.anisotropy = 8;
   tex.colorSpace = THREE.SRGBColorSpace;
   texCache.set(key, tex);

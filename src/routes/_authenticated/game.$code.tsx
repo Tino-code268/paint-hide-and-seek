@@ -8,6 +8,7 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   MAPS, type MapDef, type WallBox, type Prop,
   PLAYER_EYE_HEIGHT, PLAYER_CROUCH_HEIGHT, PLAYER_RADIUS,
+  parseRoomConfig, type RoomConfig,
 } from "@/game/maps";
 import {
   usePresence, type PlayerState, type PaintStroke, type BodyPart, type ShotEvent,
@@ -62,14 +63,22 @@ function GameRoute() {
 
       // RLS(보안 규칙) 때문에 방장이 다른 플레이어의 role을 DB에 못 쓴다.
       // 대신 모두가 똑같이 계산할 수 있는 시드(방 id + 시작 시각)로 술래를 정한다 —
-      // 모든 클라이언트가 같은 결과를 얻으므로 역할이 비는 사람이 없다.
+      // 설정된 헌터 수만큼 결정론적으로 뽑는다.
+      const cfgL = parseRoomConfig(r.map_name);
       const seed = r.id + (r.started_at ?? "");
       let h = 0;
       for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
-      const seekerIdx = rows.length > 0 ? Math.abs(h) % rows.length : 0;
+      const order = rows.map((_, i) => i);
+      const rnd = () => { h = (h * 1664525 + 1013904223) | 0; return (h >>> 0) / 4294967296; };
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(rnd() * (i + 1));
+        [order[i], order[j]] = [order[j], order[i]];
+      }
+      const nSeek = Math.min(Math.max(1, cfgL.seekers), Math.max(1, rows.length - 1));
+      const seekerSet = new Set(order.slice(0, nSeek));
 
       setMe({
-        role: mineIdx === seekerIdx ? "seeker" : "hider",
+        role: seekerSet.has(mineIdx) ? "seeker" : "hider",
         username: prof?.username ?? "player",
         spawnIndex: mineIdx >= 0 ? mineIdx : 0,
       });
@@ -106,8 +115,9 @@ function GameRoute() {
     return <div className="min-h-screen flex items-center justify-center text-muted-foreground">3D 로딩 중...</div>;
   }
 
-  const mapDef = MAPS[room.map_name] ?? MAPS.house;
-  return <GameScene room={room} mapDef={mapDef} me={me} selfUserId={user.id} />;
+  const cfg = parseRoomConfig(room.map_name);
+  const mapDef = MAPS[cfg.map] ?? MAPS.house;
+  return <GameScene room={room} mapDef={mapDef} me={me} selfUserId={user.id} cfg={cfg} />;
 }
 
 // -----------------------------------------------------------------------------
@@ -121,29 +131,30 @@ const PHASE_LABEL: Record<Phase, string> = {
   seek: "찾는 시간",
   end: "게임 종료",
 };
-const PREP_END = 10, HIDE_END = 130, SEEK_END = 530;
+const PREP_SEC = 10;
 
-function computePhase(startedAt: number): { phase: Phase; remaining: number } {
+function computePhase(startedAt: number, hideSec: number, seekSec: number): { phase: Phase; remaining: number } {
+  const hideEnd = PREP_SEC + hideSec, seekEnd = hideEnd + seekSec;
   const el = Math.max(0, (Date.now() - startedAt) / 1000);
-  if (el < PREP_END) return { phase: "prep", remaining: Math.ceil(PREP_END - el) };
-  if (el < HIDE_END) return { phase: "hide", remaining: Math.ceil(HIDE_END - el) };
-  if (el < SEEK_END) return { phase: "seek", remaining: Math.ceil(SEEK_END - el) };
+  if (el < PREP_SEC) return { phase: "prep", remaining: Math.ceil(PREP_SEC - el) };
+  if (el < hideEnd) return { phase: "hide", remaining: Math.ceil(hideEnd - el) };
+  if (el < seekEnd) return { phase: "seek", remaining: Math.ceil(seekEnd - el) };
   return { phase: "end", remaining: 0 };
 }
 
-function useGamePhase(startedAt: number) {
-  const [state, setState] = useState(() => computePhase(startedAt));
+function useGamePhase(startedAt: number, hideSec: number, seekSec: number) {
+  const [state, setState] = useState(() => computePhase(startedAt, hideSec, seekSec));
   const forcedRef = useRef(false);
   useEffect(() => {
     const t = setInterval(() => {
       if (forcedRef.current) return;
       setState((prev) => {
-        const next = computePhase(startedAt);
+        const next = computePhase(startedAt, hideSec, seekSec);
         return next.phase === prev.phase && next.remaining === prev.remaining ? prev : next;
       });
     }, 250);
     return () => clearInterval(t);
-  }, [startedAt]);
+  }, [startedAt, hideSec, seekSec]);
   useEffect(() => { sfxDing(); }, [state.phase]);
   const endNow = useCallback(() => { forcedRef.current = true; setState({ phase: "end", remaining: 0 }); }, []);
   return { phase: state.phase, remaining: state.remaining, endNow };
@@ -232,9 +243,9 @@ export type SelfAnim = {
 };
 
 function GameScene({
-  room, mapDef, me, selfUserId,
+  room, mapDef, me, selfUserId, cfg,
 }: {
-  room: RoomData; mapDef: MapDef; me: MyPlayer; selfUserId: string;
+  room: RoomData; mapDef: MapDef; me: MyPlayer; selfUserId: string; cfg: RoomConfig;
 }) {
   const [locked, setLocked] = useState(false);
   const [paintMode, setPaintMode] = useState(false);
@@ -243,7 +254,7 @@ function GameScene({
     () => room.started_at ? new Date(room.started_at).getTime() : Date.now(),
     [room.started_at],
   );
-  const { phase, remaining, endNow } = useGamePhase(startedAtMs);
+  const { phase, remaining, endNow } = useGamePhase(startedAtMs, cfg.hide, cfg.seek);
 
   const isSeeker = me.role === "seeker";
 
@@ -610,7 +621,7 @@ function GameScene({
             <div className="mt-3 text-7xl font-black text-white tabular-nums drop-shadow-lg">{remaining}</div>
             <div className="mt-3 text-sm text-white/80 leading-relaxed">
               {isSeeker
-                ? <>카멜레온들이 숨는 120초 동안 기다렸다가<br/>좌클릭 샷건으로 전부 찾아내자!</>
+                ? <>카멜레온들이 숨는 {cfg.hide}초 동안 기다렸다가<br/>좌클릭 샷건으로 전부 찾아내자!</>
                 : <>화면에 내 몸이 보여! E로 색을 추출하고 F로 칠해서<br/>배경에 완벽하게 녹아들자. Q로 벽에 붙을 수도 있어!</>}
             </div>
           </div>
