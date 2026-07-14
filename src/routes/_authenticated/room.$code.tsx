@@ -234,7 +234,7 @@ function Room() {
             <CardTitle className="text-base">게임 설정 {!isHost && <span className="text-xs text-muted-foreground font-normal">(방장만 변경 가능)</span>}</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div>
                 <div className="text-xs text-muted-foreground mb-1">맵</div>
                 {isHost ? (
@@ -267,6 +267,18 @@ function Room() {
                     </SelectContent>
                   </Select>
                 ) : <div className="font-semibold">{cfg.seek}초</div>}
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">게임 모드</div>
+                {isHost ? (
+                  <Select value={cfg.mode} onValueChange={(v) => updateCfg({ mode: v as "basic" | "infect" })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="basic">일반전</SelectItem>
+                      <SelectItem value="infect">감염전 🧟</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : <div className="font-semibold">{cfg.mode === "infect" ? "감염전 🧟" : "일반전"}</div>}
               </div>
               <div>
                 <div className="text-xs text-muted-foreground mb-1">헌터 수</div>

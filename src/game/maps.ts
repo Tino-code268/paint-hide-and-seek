@@ -1101,22 +1101,25 @@ MAPS["arena"] = arcade;
 
 
 // ---- 방 설정: map_name 컬럼에 "맵|h숨는초|s찾는초|k헌터수" 형태로 저장 ----
-export type RoomConfig = { map: string; hide: number; seek: number; seekers: number };
+export type GameMode = "basic" | "infect";
+export type RoomConfig = { map: string; hide: number; seek: number; seekers: number; mode: GameMode };
 
 export function parseRoomConfig(raw: string | null | undefined): RoomConfig {
   const parts = (raw ?? "").split("|");
   const map = parts[0] || "house";
   let hide = 120, seek = 400, seekers = 1;
+  let mode: GameMode = "basic";
   for (const p of parts.slice(1)) {
     if (p.startsWith("h")) hide = parseInt(p.slice(1), 10) || 120;
     else if (p.startsWith("s")) seek = parseInt(p.slice(1), 10) || 400;
     else if (p.startsWith("k")) seekers = parseInt(p.slice(1), 10) || 1;
+    else if (p.startsWith("m")) mode = p.slice(1) === "1" ? "infect" : "basic";
   }
-  return { map, hide, seek, seekers };
+  return { map, hide, seek, seekers, mode };
 }
 
 export function encodeRoomConfig(c: RoomConfig): string {
-  return `${c.map}|h${c.hide}|s${c.seek}|k${c.seekers}`;
+  return `${c.map}|h${c.hide}|s${c.seek}|k${c.seekers}|m${c.mode === "infect" ? 1 : 0}`;
 }
 
 export const PLAYER_EYE_HEIGHT = PLAYER_EYE;

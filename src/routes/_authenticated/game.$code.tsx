@@ -256,7 +256,13 @@ function GameScene({
   );
   const { phase, remaining, endNow } = useGamePhase(startedAtMs, cfg.hide, cfg.seek);
 
-  const isSeeker = me.role === "seeker";
+  // 감염전: 잡히면 역할이 술래로 바뀐다 · 새로고침해도 상태 유지(부활 방지)
+  const matchKey = `mecha:${room.id}:${room.started_at ?? ""}:${selfUserId}`;
+  const [myRole, setMyRole] = useState<"hider" | "seeker" | null>(() => {
+    if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(matchKey) === "infected") return "seeker";
+    return me.role;
+  });
+  const isSeeker = myRole === "seeker";
 
   const touchInput = useRef<TouchState>({
     mx: 0, mz: 0, lookX: 0, lookY: 0,
@@ -313,7 +319,8 @@ function GameScene({
   useEffect(() => { getOrCreatePaint(selfUserId); }, [selfUserId, getOrCreatePaint]);
 
   // ---- match state ----
-  const [myCaught, setMyCaught] = useState(false);
+  const [myCaught, setMyCaught] = useState<boolean>(() =>
+    typeof sessionStorage !== "undefined" && sessionStorage.getItem(matchKey) === "caught");
   const myCaughtRef = useRef(false);
   myCaughtRef.current = myCaught;
   const [caughtIds, setCaughtIds] = useState<Set<string>>(() => new Set());
@@ -343,19 +350,29 @@ function GameScene({
     addSplats(e.points, e.color);
     if (e.targets.length > 0) {
       sfxHit();
-      // 잡힘 알림: 헌터(쏜 사람)에겐 "잡았습니다", 나머지 모두에겐 "잡혔습니다"
+      const infect = cfg.mode === "infect";
       for (const uid of e.targets) {
         const nm = uid === selfUserId ? me.username : (remoteHolder.current?.get(uid)?.username ?? "누군가");
-        showToast(isLocal ? `🎯 ${nm}님을 잡았습니다!` : `💀 ${nm}님이 잡혔습니다!`);
+        if (infect) showToast(isLocal ? `🧟 ${nm}님을 감염시켰다!` : `🧟 ${nm}님이 감염됐다!`);
+        else showToast(isLocal ? `🎯 ${nm}님을 잡았습니다!` : `💀 ${nm}님이 잡혔습니다!`);
       }
-      setCaughtIds((prev) => {
-        const next = new Set(prev);
-        for (const t of e.targets) next.add(t);
-        return next;
-      });
-      if (e.targets.includes(selfUserId)) setMyCaught(true);
+      if (!infect) {
+        setCaughtIds((prev) => {
+          const next = new Set(prev);
+          for (const t of e.targets) next.add(t);
+          return next;
+        });
+        if (e.targets.includes(selfUserId)) {
+          setMyCaught(true);
+          try { sessionStorage.setItem(matchKey, "caught"); } catch { /* ignore */ }
+        }
+      } else if (e.targets.includes(selfUserId)) {
+        setMyRole("seeker");
+        showToast("🧟 감염됐다! 이제 너도 술래다 — 사냥 시작!");
+        try { sessionStorage.setItem(matchKey, "infected"); } catch { /* ignore */ }
+      }
     }
-  }, [addSplats, selfUserId, me.username, showToast]);
+  }, [addSplats, selfUserId, me.username, showToast, cfg.mode, matchKey]);
 
   const handleRemotePaint = useCallback((s: PaintStroke) => {
     const entry = getOrCreatePaint(s.userId);
@@ -369,7 +386,7 @@ function GameScene({
   }, []);
 
   const { remoteRef, sendState, sendPaint, sendShot, sendWhistle } = usePresence(
-    room.id, selfUserId, { username: me.username, role: me.role },
+    room.id, selfUserId, { username: me.username, role: myRole },
     {
       onPaint: handleRemotePaint,
       onShot: (e) => applyShot(e, false),
@@ -384,7 +401,7 @@ function GameScene({
   useEffect(() => {
     const t = setInterval(() => {
       const hiders = new Set<string>();
-      if (me.role === "hider") hiders.add(selfUserId);
+      if (myRole === "hider") hiders.add(selfUserId);
       for (const [uid, st] of remoteRef.current) {
         if (st.role === "hider") hiders.add(uid);
       }
@@ -394,12 +411,12 @@ function GameScene({
           (uid === selfUserId ? myCaughtRef.current : !!remoteRef.current.get(uid)?.caught);
         if (!caught) alive++;
       }
-      let seekers = me.role === "seeker" ? 1 : 0;
+      let seekers = myRole === "seeker" ? 1 : 0;
       for (const [, st] of remoteRef.current) if (st.role === "seeker") seekers++;
       setAliveInfo({ alive, total: hiders.size, seekers });
     }, 500);
     return () => clearInterval(t);
-  }, [me.role, selfUserId, remoteRef]);
+  }, [myRole, selfUserId, remoteRef]);
 
   useEffect(() => {
     if (phase === "seek" && aliveInfo.total > 0 && aliveInfo.alive === 0 && !gameResult) {
@@ -523,6 +540,8 @@ function GameScene({
         shadows
         camera={{ fov: 75, near: 0.1, far: 500, position: spawn }}
         gl={{ antialias: true }}
+        style={{ touchAction: "none" }}
+        onCreated={({ gl }) => { gl.domElement.style.touchAction = "none"; }}
       >
         <color attach="background" args={[mapDef.skyColor]} />
         <fog attach="fog" args={[mapDef.skyColor, mapDef.fogNear, mapDef.fogFar]} />
@@ -544,7 +563,7 @@ function GameScene({
           selfUserId={selfUserId}
           getPaint={getOrCreatePaint}
           caughtIds={caughtIds}
-          myRole={me.role}
+          myRole={myRole}
           whistlesRef={whistlesRef}
         />
 
@@ -594,7 +613,7 @@ function GameScene({
 
       <Hud
         code={room.code}
-        role={me.role}
+        role={myRole}
         username={me.username}
         alive={aliveInfo.alive}
         total={aliveInfo.total}
@@ -1785,7 +1804,6 @@ function Hud({
           <button onClick={() => onSchemeChange("pc")} className={`px-2 py-1 ${scheme === "pc" ? "bg-white text-black" : "text-white/70"}`}>PC</button>
           <button onClick={() => onSchemeChange("mobile")} className={`px-2 py-1 ${scheme === "mobile" ? "bg-white text-black" : "text-white/70"}`}>모바일</button>
         </div>
-        <Link to="/room/$code" params={{ code }}><Button size="sm" variant="outline">대기실</Button></Link>
       </div>
 
       {!isSeeker && (
