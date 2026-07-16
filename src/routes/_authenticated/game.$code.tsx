@@ -330,6 +330,7 @@ function GameScene({
   const splatSeq = useRef(0);
   const whistlesRef = useRef<Record<string, number>>({});
   const [aliveInfo, setAliveInfo] = useState({ alive: 0, total: 0, seekers: 0 });
+  const hadHidersRef = useRef(false); // 감염전: 전원 감염 시 total이 0이 되어도 종료 판정용
   const [gameResult, setGameResult] = useState<null | "seeker" | "hider">(null);
 
   const remoteHolder = useRef<Map<string, PlayerState> | null>(null);
@@ -385,12 +386,17 @@ function GameScene({
     sfxWhistle();
   }, []);
 
-  const { remoteRef, sendState, sendPaint, sendShot, sendWhistle } = usePresence(
+  const { remoteRef, sendState, sendPaint, sendShot, sendWhistle, sendPaintClear } = usePresence(
     room.id, selfUserId, { username: me.username, role: myRole },
     {
       onPaint: handleRemotePaint,
       onShot: (e) => applyShot(e, false),
       onWhistle: handleRemoteWhistle,
+      onPaintClear: (uid) => {
+        const entry = getOrCreatePaint(uid);
+        entry.strokes = [];
+        resetCanvases(entry.canvases, entry.textures);
+      },
       getMyStrokes: () => paintStoreRef.current.get(selfUserId)?.strokes ?? [],
     },
   );
@@ -413,13 +419,14 @@ function GameScene({
       }
       let seekers = myRole === "seeker" ? 1 : 0;
       for (const [, st] of remoteRef.current) if (st.role === "seeker") seekers++;
+      if (hiders.size > 0) hadHidersRef.current = true;
       setAliveInfo({ alive, total: hiders.size, seekers });
     }, 500);
     return () => clearInterval(t);
   }, [myRole, selfUserId, remoteRef]);
 
   useEffect(() => {
-    if (phase === "seek" && aliveInfo.total > 0 && aliveInfo.alive === 0 && !gameResult) {
+    if (phase === "seek" && aliveInfo.alive === 0 && (aliveInfo.total > 0 || hadHidersRef.current) && !gameResult) {
       setGameResult("seeker");
       endNow();
     }
@@ -488,7 +495,8 @@ function GameScene({
     const entry = getOrCreatePaint(selfUserId);
     entry.strokes = [];
     resetCanvases(entry.canvases, entry.textures);
-  }, [getOrCreatePaint, selfUserId]);
+    sendPaintClear(); // 다른 사람들 화면에서도 지워지게 동기화
+  }, [getOrCreatePaint, selfUserId, sendPaintClear]);
 
   const handleEyedrop = useCallback((color: string) => {
     setBodyColor(color);
@@ -682,7 +690,7 @@ function GameScene({
               {gameResult === "hider" ? "카멜레온 승리! 🦎" : "헌터 승리! 🔫"}
             </div>
             <div className="mt-4 text-white/80">
-              {gameResult === "hider" ? "끝까지 살아남았다!" : "전원 검거 완료!"}
+              {gameResult === "hider" ? "끝까지 살아남았다!" : (cfg.mode === "infect" ? "전원 감염 완료! 🧟" : "전원 검거 완료!")}
             </div>
             <div className="mt-2 text-sm text-white/50">잠시 후 자동으로 대기실로 이동합니다...</div>
             <div className="mt-8">
@@ -887,39 +895,39 @@ function PlayerBody({
       <group ref={legLg} position={[-0.16, 0.82, 0]}>
         <mesh position={[0, -0.4, 0]} castShadow {...h("legL")}>
           <capsuleGeometry args={[0.15, 0.9, 6, 14]} />
-          <meshStandardMaterial map={textures.legL} color="#ffffff" roughness={1} />
+          <meshLambertMaterial map={textures.legL} color="#ffffff" />
         </mesh>
       </group>
       <group ref={legRg} position={[0.16, 0.82, 0]}>
         <mesh position={[0, -0.4, 0]} castShadow {...h("legR")}>
           <capsuleGeometry args={[0.15, 0.9, 6, 14]} />
-          <meshStandardMaterial map={textures.legR} color="#ffffff" roughness={1} />
+          <meshLambertMaterial map={textures.legR} color="#ffffff" />
         </mesh>
       </group>
       {/* body+head — ONE continuous lathe surface, zero seams (figurine!) */}
       <mesh scale={[1, 1, 0.85]} castShadow {...h("torso")}>
         <latheGeometry args={[lathePts, 26]} />
-        <meshStandardMaterial map={textures.torso} color="#ffffff" roughness={1} />
+        <meshLambertMaterial map={textures.torso} color="#ffffff" />
       </mesh>
       {/* arms (pivot at shoulder; shoulder ball bridges arm & torso) */}
       <group ref={armLg} position={[-0.35, 1.42, 0]} rotation={[0, 0, 0.07]}>
         <mesh castShadow {...h("armL")}>
           <sphereGeometry args={[0.15, 14, 12]} />
-          <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={1} />
+          <meshLambertMaterial map={textures.armL} color="#ffffff" />
         </mesh>
         <mesh position={[0, -0.3, 0]} castShadow {...h("armL")}>
           <capsuleGeometry args={[0.115, 0.7, 6, 12]} />
-          <meshStandardMaterial map={textures.armL} color="#ffffff" roughness={1} />
+          <meshLambertMaterial map={textures.armL} color="#ffffff" />
         </mesh>
       </group>
       <group ref={armRg} position={[0.35, 1.42, 0]} rotation={[0, 0, -0.07]}>
         <mesh castShadow {...h("armR")}>
           <sphereGeometry args={[0.15, 14, 12]} />
-          <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={1} />
+          <meshLambertMaterial map={textures.armR} color="#ffffff" />
         </mesh>
         <mesh position={[0, -0.3, 0]} castShadow {...h("armR")}>
           <capsuleGeometry args={[0.115, 0.7, 6, 12]} />
-          <meshStandardMaterial map={textures.armR} color="#ffffff" roughness={1} />
+          <meshLambertMaterial map={textures.armR} color="#ffffff" />
         </mesh>
         {/* hunters carry the paint shotgun in their right hand */}
         {seeker && (
@@ -1347,9 +1355,14 @@ function LocalPlayer({
         p.z + Math.cos(yaw) * cp * dist,
       );
       camera.lookAt(p.x, p.y - 0.2, p.z);
-      const bodyYaw = stuckRef.current ? stuckYawRef.current : yawRef.current;
-      syncSelfAnim(false, crouchRef.current, bodyYaw);
-      sendState(p.x, p.y, p.z, bodyYaw, crouchRef.current, false, poseRef.current, caughtRef.current, stuckRef.current);
+      const bodyYaw = stuckRef.current ? (freezeYawRef.current ?? stuckYawRef.current) : yawRef.current;
+      const paintPose = stuckRef.current
+        ? (stuckFloorRef.current ? 1 : (poseRef.current === 1 ? 0 : poseRef.current))
+        : poseRef.current;
+      const paintCrouch = stuckRef.current ? false : crouchRef.current;
+      syncSelfAnim(false, paintCrouch, bodyYaw);
+      selfAnim.current.pose = paintPose;
+      sendState(p.x, p.y, p.z, bodyYaw, paintCrouch, false, paintPose, caughtRef.current, stuckRef.current);
       return;
     }
 
@@ -1411,6 +1424,7 @@ function LocalPlayer({
     const speed = crouch ? CROUCH_SPEED : (k["ShiftLeft"] || k["ShiftRight"] ? RUN_SPEED : WALK_SPEED);
     tryAxisMove(p, colliders, floorSize, move.x * speed * dt, 0);
     tryAxisMove(p, colliders, floorSize, 0, move.z * speed * dt);
+    resolvePenetration(p, colliders);
 
     if (!frozen && onGround.current && (k["Space"] || ti.jump)) {
       velY.current = JUMP_V;
@@ -1469,6 +1483,33 @@ function findFreeSpot(
     }
   }
   return [x, z];
+}
+
+// 어떤 이유로든 벽 안에 들어가면 가장 가까운 면으로 밀어낸다 (뚫림 원천 차단)
+function resolvePenetration(p: THREE.Vector3, walls: WallBox[]) {
+  const r = PLAYER_RADIUS;
+  const playerBottom = p.y - PLAYER_EYE_HEIGHT + 0.1;
+  const playerTop = p.y + 0.1;
+  for (let iter = 0; iter < 2; iter++) {
+    let pushed = false;
+    for (const w of walls) {
+      const [wx, wy, wz] = w.pos; const [sx, sy, sz] = w.size;
+      const maxY = wy + sy / 2, minY = wy - sy / 2;
+      if (maxY < playerBottom + 0.5 || minY > playerTop) continue;
+      const minX = wx - sx / 2 - r, maxX = wx + sx / 2 + r;
+      const minZ = wz - sz / 2 - r, maxZ = wz + sz / 2 + r;
+      if (p.x <= minX || p.x >= maxX || p.z <= minZ || p.z >= maxZ) continue;
+      const pushes: [number, number, number][] = [
+        [p.x - minX, minX, 0], [maxX - p.x, maxX, 0],
+        [p.z - minZ, 0, minZ], [maxZ - p.z, 0, maxZ],
+      ];
+      pushes.sort((a, b) => a[0] - b[0]);
+      const [, px, pz] = pushes[0];
+      if (px !== 0) p.x = px; else p.z = pz;
+      pushed = true;
+    }
+    if (!pushed) break;
+  }
 }
 
 function tryAxisMove(p: THREE.Vector3, walls: WallBox[], floorSize: [number, number], dx: number, dz: number) {

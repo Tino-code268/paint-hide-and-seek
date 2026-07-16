@@ -50,6 +50,7 @@ export function usePresence(
     onPaint?: (s: PaintStroke) => void;
     onShot?: (e: ShotEvent) => void;
     onWhistle?: (userId: string) => void;
+    onPaintClear?: (userId: string) => void;
     /** Called when a newly-joined player asks for existing paint. Return my strokes. */
     getMyStrokes?: () => PaintStroke[];
   },
@@ -103,6 +104,12 @@ export function usePresence(
         const e = payload as ShotEvent;
         if (!e || e.shooterId === selfUserId) return;
         handlersRef.current.onShot?.(e);
+      });
+
+      channel.on("broadcast", { event: "paint_clear" }, ({ payload }) => {
+        const uid = (payload as { userId: string }).userId;
+        if (uid === selfUserId) return;
+        handlersRef.current.onPaintClear?.(uid);
       });
 
       channel.on("broadcast", { event: "whistle" }, ({ payload }) => {
@@ -190,11 +197,17 @@ export function usePresence(
     ch.send({ type: "broadcast", event: "shot", payload: { ...e, shooterId: selfUserId } }).catch(() => {});
   };
 
+  const sendPaintClear = () => {
+    const ch = channelRef.current;
+    if (!ch) return;
+    ch.send({ type: "broadcast", event: "paint_clear", payload: { userId: selfUserId } }).catch(() => {});
+  };
+
   const sendWhistle = () => {
     const ch = channelRef.current;
     if (!ch) return;
     ch.send({ type: "broadcast", event: "whistle", payload: { userId: selfUserId } }).catch(() => {});
   };
 
-  return { remoteRef, sendState, sendPaint, sendShot, sendWhistle };
+  return { remoteRef, sendState, sendPaint, sendShot, sendWhistle, sendPaintClear };
 }
