@@ -582,6 +582,7 @@ function GameScene({
             paintMode={paintMode}
             onPaint={applyLocalStroke}
             paintingActive={paintingActive}
+            scale={isSeeker ? 1 : 0.85}
           />
         )}
 
@@ -956,13 +957,14 @@ function PlayerBody({
 // -----------------------------------------------------------------------------
 
 function SelfBody({
-  selfAnim, textures, paintMode, onPaint, paintingActive,
+  selfAnim, textures, paintMode, onPaint, paintingActive, scale = 1,
 }: {
   selfAnim: React.MutableRefObject<SelfAnim>;
   textures: PaintTextures;
   paintMode: boolean;
   onPaint: (part: BodyPart, x: number, y: number, from?: { x: number; y: number }) => void;
   paintingActive: React.MutableRefObject<boolean>;
+  scale?: number;
 }) {
   const group = useRef<THREE.Group>(null);
   const drawingRef = useRef(false);
@@ -1025,7 +1027,7 @@ function SelfBody({
   }, [selfAnim]);
 
   return (
-    <group ref={group} userData={{ noRay: true }}>
+    <group ref={group} userData={{ noRay: true }} scale={scale}>
       <PlayerBody
         textures={textures}
         seeker={false}
@@ -1714,7 +1716,7 @@ function Mascot({
   }, [remoteRef, userId]);
 
   const initial = state ? [state.x, 0, state.z] as [number, number, number] : [0, 0, 0] as [number, number, number];
-  const scale = isSeekerMascot ? 1.25 : 1;
+  const scale = isSeekerMascot ? 1.25 : 0.85; // 카멜레온은 더 작게!
   return (
     <group ref={group} position={initial} scale={scale} userData={{ playerId: userId }}>
       <PlayerBody textures={textures} seeker={!!isSeekerMascot} sample={sample} />
