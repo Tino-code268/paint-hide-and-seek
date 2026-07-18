@@ -36,6 +36,46 @@ export async function signInWithUsername(username: string, password: string) {
   return supabase.auth.signInWithPassword({ email, password });
 }
 
+const GUEST_KEY = "mecha:guest-cred";
+
+function randChars(n: number): string {
+  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(n));
+  let out = "";
+  for (const b of bytes) out += alphabet[b % alphabet.length];
+  return out;
+}
+
+/** 게스트 시작: 닉네임만 받고 내부적으로 계정을 만들어 바로 로그인.
+ *  같은 기기에서는 저장된 게스트 계정을 재사용한다. */
+export async function signInAsGuest(nickname: string) {
+  const nick = nickname.trim();
+  // 1) 이 기기에 저장된 게스트 계정이 있으면 재사용
+  try {
+    const saved = localStorage.getItem(GUEST_KEY);
+    if (saved) {
+      const { id, pw } = JSON.parse(saved) as { id: string; pw: string };
+      const r = await signInWithUsername(id, pw);
+      if (!r.error) {
+        const uid = r.data.user?.id;
+        if (uid) {
+          // 새로 입력한 닉네임으로 갱신 (겹치면 기존 닉네임 유지)
+          await supabase.from("profiles").update({ username: nick }).eq("id", uid);
+        }
+        return { error: null };
+      }
+    }
+  } catch { /* ignore */ }
+  // 2) 새 게스트 계정 생성
+  const id = `guest_${randChars(8)}`;
+  const pw = randChars(16);
+  const { error } = await signUpWithUsername(id, pw, nick);
+  if (!error) {
+    try { localStorage.setItem(GUEST_KEY, JSON.stringify({ id, pw })); } catch { /* ignore */ }
+  }
+  return { error };
+}
+
 export function generateRoomCode(): string {
   // 6-digit numeric room code
   return String(Math.floor(100000 + Math.random() * 900000));

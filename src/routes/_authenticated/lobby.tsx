@@ -22,7 +22,19 @@ function Lobby() {
   const [stats, setStats] = useState({ wins: 0, losses: 0 });
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [mapName, setMapName] = useState<string>("restaurant");
+  const [mapName, setMapName] = useState<string>("house");
+  const [editingNick, setEditingNick] = useState(false);
+  const [nickInput, setNickInput] = useState("");
+
+  const saveNick = async () => {
+    const t = nickInput.trim();
+    if (t.length < 1 || t.length > 12) return toast.error("닉네임은 1~12자");
+    const { error } = await supabase.from("profiles").update({ username: t }).eq("id", user.id);
+    if (error) return toast.error("이미 있는 닉네임이에요! 다른 걸로 해봐");
+    setUsername(t);
+    setEditingNick(false);
+    toast.success("닉네임 변경 완료!");
+  };
   const [scheme, setScheme] = useState<ControlScheme>(() => getControlScheme());
   const applyScheme = (s: ControlScheme) => { setScheme(s); setControlScheme(s); };
 
@@ -101,9 +113,23 @@ function Lobby() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-border/50">
         <Link to="/" className="font-bold tracking-widest text-primary text-glow">MECHA · CHAMELEON</Link>
         <div className="flex items-center gap-4 text-sm">
-          <div className="text-muted-foreground">
-            <span className="text-foreground font-semibold">{username || "..."}</span>
-            <span className="ml-3 text-xs">W {stats.wins} · L {stats.losses}</span>
+          <div className="text-muted-foreground flex items-center gap-2">
+            {editingNick ? (
+              <span className="flex items-center gap-1">
+                <Input value={nickInput} onChange={(e) => setNickInput(e.target.value)} maxLength={12}
+                  className="h-8 w-32 text-sm" placeholder="새 닉네임"
+                  onKeyDown={(e) => { if (e.key === "Enter") saveNick(); }} autoFocus />
+                <Button size="sm" className="h-8 px-2" onClick={saveNick}>저장</Button>
+                <Button size="sm" variant="ghost" className="h-8 px-2" onClick={() => setEditingNick(false)}>취소</Button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1">
+                <span className="text-foreground font-semibold">{username || "..."}</span>
+                <button onClick={() => { setNickInput(username); setEditingNick(true); }}
+                  className="text-xs opacity-60 hover:opacity-100" title="닉네임 변경">✏️</button>
+              </span>
+            )}
+            <span className="ml-2 text-xs">W {stats.wins} · L {stats.losses}</span>
           </div>
           <Button variant="outline" size="sm" onClick={handleLogout}>로그아웃</Button>
         </div>

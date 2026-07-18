@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
-import { isValidLoginId, isValidNickname, signInWithUsername, signUpWithUsername } from "@/lib/auth-helpers";
+import { isValidLoginId, isValidNickname, signInWithUsername, signUpWithUsername, signInAsGuest } from "@/lib/auth-helpers";
 
 export const Route = createFileRoute("/auth")({
   component: AuthPage,
@@ -23,6 +23,24 @@ function AuthPage() {
       if (data.session) navigate({ to: "/lobby", replace: true });
     });
   }, [navigate]);
+
+  const handleGuest = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const nickname = String(form.get("guest-nickname") || "");
+    if (!isValidNickname(nickname)) return toast.error("닉네임은 1~12자 (한글 가능!)");
+    setLoading(true);
+    const { error } = await signInAsGuest(nickname);
+    setLoading(false);
+    if (error) {
+      const low = error.message.toLowerCase();
+      return toast.error(low.includes("database")
+        ? "이미 사용 중인 닉네임일 수 있어요 — 다른 닉네임으로 해보세요!"
+        : "게스트 시작 실패: " + error.message);
+    }
+    toast.success("게스트로 입장!");
+    navigate({ to: "/lobby", replace: true });
+  };
 
   const handleSignIn = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -116,6 +134,22 @@ function AuthPage() {
                 </form>
               </TabsContent>
             </Tabs>
+
+            <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
+              <div className="flex-1 h-px bg-border/60" />
+              또는
+              <div className="flex-1 h-px bg-border/60" />
+            </div>
+
+            <form onSubmit={handleGuest} className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="guest-nickname">닉네임만 정하고 바로 시작 (한글 가능)</Label>
+                <Input id="guest-nickname" name="guest-nickname" required maxLength={12} placeholder="예: 초록카멜레온" />
+              </div>
+              <Button type="submit" variant="secondary" className="w-full" disabled={loading}>
+                {loading ? "..." : "🦎 게스트로 바로 시작"}
+              </Button>
+            </form>
           </CardContent>
         </Card>
       </div>
