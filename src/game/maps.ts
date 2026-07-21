@@ -1302,13 +1302,32 @@ function makeMuseum(): MapDef {
   };
 }
 
-const house = makeHouse();
-const restaurant = makeRestaurant();
-const arcade = makeArcade();
-const farm = makeFarm();
-const minecraft = makeMinecraft();
-const cropfarm = makeCropFarm();
-const museum = makeMuseum();
+/** 맵 전체를 f배 넓힌다 (높이는 유지) */
+function widen(m: MapDef, f: number): MapDef {
+  m.floorSize = [m.floorSize[0] * f, m.floorSize[1] * f];
+  for (const w of m.walls) {
+    w.pos = [w.pos[0] * f, w.pos[1], w.pos[2] * f];
+    w.size = [w.size[0] * f, w.size[1], w.size[2] * f];
+    if (w.texRepeat) w.texRepeat = [Math.max(1, Math.round(w.texRepeat[0] * f)), w.texRepeat[1]];
+  }
+  for (const pr of m.props) {
+    pr.pos = [pr.pos[0] * f, pr.pos[1], pr.pos[2] * f];
+    if (pr.kind === "cylinder") { pr.radiusTop *= f; pr.radiusBottom *= f; }
+    else pr.radius *= Math.sqrt(f);
+  }
+  m.spawnPoints = m.spawnPoints.map((sp) => [sp[0] * f, sp[1], sp[2] * f]);
+  m.fogNear = m.fogNear * f * 0.85;
+  m.fogFar = m.fogFar * f * 0.9;
+  return m;
+}
+
+const house = widen(makeHouse(), 2);
+const restaurant = widen(makeRestaurant(), 2);
+const arcade = widen(makeArcade(), 2);
+const farm = widen(makeFarm(), 2);
+const minecraft = widen(makeMinecraft(), 2);
+const cropfarm = widen(makeCropFarm(), 2);
+const museum = widen(makeMuseum(), 2);
 
 export const MAPS: Record<string, MapDef> = { house, farm, cropfarm, museum, minecraft, restaurant, arcade };
 export const MAP_LIST = [house, farm, cropfarm, museum, minecraft, restaurant, arcade];
@@ -1322,24 +1341,27 @@ MAPS["arena"] = arcade;
 
 // ---- 방 설정: map_name 컬럼에 "맵|h숨는초|s찾는초|k헌터수" 형태로 저장 ----
 export type GameMode = "basic" | "infect";
-export type RoomConfig = { map: string; hide: number; seek: number; seekers: number; mode: GameMode };
+export type RoomConfig = { map: string; hide: number; seek: number; seekers: number; mode: GameMode; chosen?: string };
 
 export function parseRoomConfig(raw: string | null | undefined): RoomConfig {
   const parts = (raw ?? "").split("|");
   const map = parts[0] || "house";
   let hide = 120, seek = 400, seekers = 1;
   let mode: GameMode = "basic";
+  let chosen: string | undefined;
   for (const p of parts.slice(1)) {
     if (p.startsWith("h")) hide = parseInt(p.slice(1), 10) || 120;
     else if (p.startsWith("s")) seek = parseInt(p.slice(1), 10) || 400;
     else if (p.startsWith("k")) seekers = parseInt(p.slice(1), 10) || 1;
     else if (p.startsWith("m")) mode = p.slice(1) === "1" ? "infect" : "basic";
+    else if (p.startsWith("c")) chosen = p.slice(1) || undefined;
   }
-  return { map, hide, seek, seekers, mode };
+  return { map, hide, seek, seekers, mode, chosen };
 }
 
 export function encodeRoomConfig(c: RoomConfig): string {
-  return `${c.map}|h${c.hide}|s${c.seek}|k${c.seekers}|m${c.mode === "infect" ? 1 : 0}`;
+  const base = `${c.map}|h${c.hide}|s${c.seek}|k${c.seekers}|m${c.mode === "infect" ? 1 : 0}`;
+  return c.chosen ? `${base}|c${c.chosen}` : base;
 }
 
 export const PLAYER_EYE_HEIGHT = PLAYER_EYE;

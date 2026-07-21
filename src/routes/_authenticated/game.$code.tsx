@@ -6,7 +6,7 @@ import * as THREE from "three";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  MAPS, type MapDef, type WallBox, type Prop,
+  MAPS, MAP_LIST, type MapDef, type WallBox, type Prop,
   PLAYER_EYE_HEIGHT, PLAYER_CROUCH_HEIGHT, PLAYER_RADIUS,
   parseRoomConfig, type RoomConfig,
 } from "@/game/maps";
@@ -123,7 +123,15 @@ function GameRoute() {
   }
 
   const cfg = parseRoomConfig(room.map_name);
-  const mapDef = MAPS[cfg.map] ?? MAPS.house;
+  let mapName = cfg.map;
+  if (mapName === "vote") mapName = cfg.chosen ?? "house";
+  if (mapName === "random") {
+    const seed = room.id + (room.started_at ?? "");
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+    mapName = MAP_LIST[Math.abs(h) % MAP_LIST.length].name;
+  }
+  const mapDef = MAPS[mapName] ?? MAPS.house;
   return <GameScene room={room} mapDef={mapDef} me={me} selfUserId={user.id} cfg={cfg} />;
 }
 
@@ -564,9 +572,9 @@ function GameScene({
         <hemisphereLight args={[mapDef.skyColor, mapDef.groundColor, 0.55]} />
         <directionalLight position={[40, 60, 25]} intensity={1.15} castShadow
           shadow-mapSize-width={2048} shadow-mapSize-height={2048}
-          shadow-camera-left={-80} shadow-camera-right={80}
-          shadow-camera-top={80} shadow-camera-bottom={-80}
-          shadow-camera-far={200} shadow-bias={-0.0005} />
+          shadow-camera-left={-150} shadow-camera-right={150}
+          shadow-camera-top={150} shadow-camera-bottom={-150}
+          shadow-camera-far={320} shadow-bias={-0.0005} />
 
         <Floor mapDef={mapDef} />
         <Walls mapDef={mapDef} />
@@ -857,12 +865,12 @@ function PlayerBody({
     const prone = s.pose === 1, curl = s.pose === 2, statue = s.pose === 3;
     const scaleY = curl ? 0.5 : (s.crouch ? 0.72 : 1);
     g.scale.y += (scaleY - g.scale.y) * lerp;
-    g.scale.z += (((s.flat ? 0.42 : 1) - g.scale.z)) * lerp;
+    g.scale.z += (((s.flat ? 0.15 : 0.45) - g.scale.z)) * lerp; // 종이 카멜레온! 평소에도 납작
     g.rotation.x += ((prone ? -Math.PI / 2 : 0) - g.rotation.x) * lerp;
     // 바닥붙기(엎드림+flat)는 더 낮게 깔린다
-    g.position.y += ((prone ? (s.flat ? 0.15 : 0.34) : 0) - g.position.y) * lerp;
+    g.position.y += ((prone ? (s.flat ? 0.1 : 0.2) : 0) - g.position.y) * lerp;
     // 벽붙기 밀착은 서 있는 상태에서만 (엎드림은 바닥 방향으로 납작)
-    g.position.z += (((s.flat && !prone) ? 0.42 : 0) - g.position.z) * lerp;
+    g.position.z += (((s.flat && !prone) ? 0.38 : 0) - g.position.z) * lerp;
 
     const target = s.moving && s.pose === 0 ? 1 : 0;
     swing.current += (target - swing.current) * Math.min(1, dt * 8);

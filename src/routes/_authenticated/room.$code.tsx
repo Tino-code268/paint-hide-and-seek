@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +39,15 @@ function Room() {
   const [room, setRoom] = useState<RoomRow | null>(null);
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [votes, setVotes] = useState<Record<string, string>>({});
+  const voteChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const myVoteRef = useRef<string | null>(null);
+
+  const sendVote = (map: string) => {
+    myVoteRef.current = map;
+    setVotes((v) => ({ ...v, [user.id]: map }));
+    voteChannelRef.current?.send({ type: "broadcast", event: "mapvote", payload: { userId: user.id, map } }).catch(() => {});
+  };
 
   const loadPlayers = useCallback(async (roomId: string) => {
     const { data } = await supabase
@@ -89,6 +98,10 @@ function Room() {
 
       channel = supabase
         .channel(`room:${room.id}`)
+        .on("broadcast", { event: "mapvote" }, ({ payload }) => {
+          const v = payload as { userId: string; map: string };
+          if (v?.userId) setVotes((prev) => ({ ...prev, [v.userId]: v.map }));
+        })
         .on("postgres_changes", { event: "*", schema: "public", table: "room_players", filter: `room_id=eq.${room.id}` },
           () => { loadPlayers(room.id); })
         .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rooms", filter: `id=eq.${room.id}` },
@@ -105,8 +118,15 @@ function Room() {
         });
     })();
 
-    // Polling fallback: refresh players every 3s while in waiting room
-    const poll = setInterval(() => { loadPlayers(room.id); }, 3000);
+    voteChannelRef.current = null;
+    // Polling fallback + 내 투표 주기 재전송 (새로 들어온 사람도 집계 가능)
+    const poll = setInterval(() => {
+      loadPlayers(room.id);
+      voteChannelRef.current = channel;
+      if (myVoteRef.current) {
+        channel?.send({ type: "broadcast", event: "mapvote", payload: { userId: user.id, map: myVoteRef.current } }).catch(() => {});
+      }
+    }, 3000);
 
     return () => {
       cancelled = true;
@@ -167,8 +187,19 @@ function Room() {
     if (!allReady) return toast.error("모든 플레이어가 준비되어야 합니다");
 
     // 역할은 게임 화면에서 시드 기반으로 모두가 똑같이 계산한다 (설정된 헌터 수만큼)
+    const patch: { status: string; started_at: string; map_name?: string } = {
+      status: "playing", started_at: new Date().toISOString(),
+    };
+    if (cfg.map === "vote") {
+      // 득표 집계 → 1등 맵 (동점이면 먼저 나온 맵, 표 없으면 하우스)
+      const tally: Record<string, number> = {};
+      for (const m of Object.values(votes)) tally[m] = (tally[m] ?? 0) + 1;
+      let winner = "house", best = -1;
+      for (const [m, n] of Object.entries(tally)) if (n > best) { winner = m; best = n; }
+      patch.map_name = encodeRoomConfig({ ...cfg, chosen: winner });
+    }
     const { error } = await supabase.from("rooms")
-      .update({ status: "playing", started_at: new Date().toISOString() })
+      .update(patch)
       .eq("id", room.id);
     if (error) toast.error("게임 시작 실패: " + error.message);
   };
@@ -252,13 +283,15 @@ function Room() {
               <div>
                 <div className="text-xs text-muted-foreground mb-1">맵</div>
                 {isHost ? (
-                  <Select value={cfg.map} onValueChange={(v) => updateCfg({ map: v })}>
+                  <Select value={cfg.map} onValueChange={(v) => updateCfg({ map: v, chosen: undefined })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {MAP_LIST.map((m) => <SelectItem key={m.name} value={m.name}>{m.displayName}</SelectItem>)}
+                      <SelectItem value="random">🎲 랜덤</SelectItem>
+                      <SelectItem value="vote">🗳️ 투표</SelectItem>
                     </SelectContent>
                   </Select>
-                ) : <div className="font-semibold">{MAPS[cfg.map]?.displayName ?? cfg.map}</div>}
+                ) : <div className="font-semibold">{cfg.map === "random" ? "🎲 랜덤" : cfg.map === "vote" ? "🗳️ 투표" : (MAPS[cfg.map]?.displayName ?? cfg.map)}</div>}
               </div>
               <div>
                 <div className="text-xs text-muted-foreground mb-1">숨는 시간</div>
@@ -308,6 +341,29 @@ function Room() {
             </div>
           </CardContent>
         </Card>
+
+        {cfg.map === "vote" && (
+          <Card className="mt-6 bg-card/70 border-border/60">
+            <CardHeader>
+              <CardTitle className="text-base">🗳️ 맵 투표 — 시작할 때 1등 맵으로 플레이!</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {MAP_LIST.map((m) => {
+                  const count = Object.values(votes).filter((v) => v === m.name).length;
+                  const mine = votes[user.id] === m.name;
+                  return (
+                    <button key={m.name} onClick={() => sendVote(m.name)}
+                      className={`rounded-lg border px-3 py-3 text-sm font-semibold transition ${mine ? "border-primary bg-primary/20 text-primary" : "border-border/60 hover:bg-muted/40"}`}>
+                      {m.displayName}
+                      <span className="block text-xs mt-1 opacity-70">{count}표</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
           최소 2명 · 술래는 지원자 중에서 랜덤으로 뽑혀요 (지원자가 없으면 전체에서 랜덤)
