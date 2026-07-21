@@ -68,14 +68,21 @@ function GameRoute() {
       const seed = r.id + (r.started_at ?? "");
       let h = 0;
       for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
-      const order = rows.map((_, i) => i);
       const rnd = () => { h = (h * 1664525 + 1013904223) | 0; return (h >>> 0) / 4294967296; };
-      for (let i = order.length - 1; i > 0; i--) {
-        const j = Math.floor(rnd() * (i + 1));
-        [order[i], order[j]] = [order[j], order[i]];
-      }
+      const shuf = (a: number[]) => {
+        for (let i = a.length - 1; i > 0; i--) {
+          const j = Math.floor(rnd() * (i + 1));
+          [a[i], a[j]] = [a[j], a[i]];
+        }
+        return a;
+      };
+      // 술래 지원자(대기실에서 role='seeker'로 표시한 사람) 중에서 먼저 뽑고,
+      // 지원자가 모자라면 나머지에서 채운다 — 모두가 같은 시드로 같은 결과를 계산.
+      const volunteers: number[] = [], others: number[] = [];
+      rows.forEach((p, i) => (p.role === "seeker" ? volunteers : others).push(i));
+      const ordered = [...shuf(volunteers), ...shuf(others)];
       const nSeek = Math.min(Math.max(1, cfgL.seekers), Math.max(1, rows.length - 1));
-      const seekerSet = new Set(order.slice(0, nSeek));
+      const seekerSet = new Set(ordered.slice(0, nSeek));
 
       setMe({
         role: seekerSet.has(mineIdx) ? "seeker" : "hider",

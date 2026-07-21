@@ -1084,14 +1084,234 @@ function makeMinecraft(): MapDef {
   };
 }
 
+
+// =============================================================================
+// MAP — 농장 (crop farm: 밭·온실·풍차·과수원, 140 x 110)
+// =============================================================================
+
+function makeCropFarm(): MapDef {
+  const W = 140, D = 110;
+  const walls: WallBox[] = [];
+  const propsArr: Prop[] = [];
+
+  fenceRun(walls, -68, -53, 68, -53);
+  fenceRun(walls, -68, 53, 68, 53);
+  fenceRun(walls, -68, -53, -68, 53);
+  fenceRun(walls, 68, -53, 68, 53);
+
+  // ---------- 밭 (고랑 + 작물 줄) ----------
+  for (const [fx, fz, crop] of [[-40, -28, "#3a9a3a"], [-40, 8, "#e8842a"], [8, -30, "#3a9a3a"]] as [number, number, string][]) {
+    floorArea(walls, fx, fz, 34, 22, "soil");
+    for (let r = 0; r < 3; r++) for (let c = 0; c < 7; c++) {
+      if (crop === "#e8842a") {
+        // 호박밭
+        propsArr.push({ kind: "sphere", pos: [fx - 13.5 + c * 4.5, 0.5, fz - 7 + r * 7], radius: 0.55, color: crop, collides: true });
+        propsArr.push({ kind: "cylinder", pos: [fx - 13.5 + c * 4.5, 1.05, fz - 7 + r * 7], radiusTop: 0.05, radiusBottom: 0.08, height: 0.25, color: "#3a5a2a" });
+      } else {
+        // 배추밭
+        propsArr.push({ kind: "sphere", pos: [fx - 13.5 + c * 4.5, 0.38, fz - 7 + r * 7], radius: 0.42, color: crop });
+      }
+    }
+  }
+
+  // ---------- 온실 (유리 하우스) ----------
+  const gx = 42, gz = -26;
+  walls.push({ pos: [gx, 0.1, gz], size: [22, 0.2, 16], tex: "tileWhite", texRepeat: [7, 5], noCollide: true });
+  for (const dz of [-8, 8]) {
+    walls.push({ pos: [gx, 2.2, gz + dz], size: [22, 4.4, 0.25], color: "#cfe8f2", noTex: true });
+  }
+  walls.push({ pos: [gx - 11, 2.2, gz + 3.5], size: [0.25, 4.4, 9], color: "#cfe8f2", noTex: true });
+  walls.push({ pos: [gx - 11, 2.2, gz - 5.5], size: [0.25, 4.4, 5], color: "#cfe8f2", noTex: true }); // 문(남쪽 틈)
+  walls.push({ pos: [gx + 11, 2.2, gz], size: [0.25, 4.4, 16], color: "#cfe8f2", noTex: true });
+  walls.push({ pos: [gx, 4.5, gz], size: [22.6, 0.25, 16.6], color: "#e4f4fa", noTex: true, noCollide: true }); // 지붕
+  for (let i = 0; i < 4; i++) {
+    walls.push({ pos: [gx - 7 + i * 4.6, 0.55, gz], size: [1.6, 1.1, 12], color: "#8a5a30", noTex: true });
+    for (let j = 0; j < 4; j++) {
+      propsArr.push({ kind: "sphere", pos: [gx - 7 + i * 4.6, 1.35, gz - 4.5 + j * 3], radius: 0.35, color: ["#e83a3a", "#3ae85c", "#f4ec3a", "#e88a3a"][(i + j) % 4] });
+    }
+  }
+
+  // ---------- 풍차 ----------
+  propsArr.push({ kind: "cylinder", pos: [-52, 5, -38], radiusTop: 2.2, radiusBottom: 3.2, height: 10, color: "#e8e0d0", collides: true });
+  walls.push({ pos: [-52, 9.5, -35.4], size: [0.6, 7, 0.35], color: "#8a5a30", noTex: true, noCollide: true });
+  walls.push({ pos: [-52, 9.5, -35.4], size: [7, 0.6, 0.35], color: "#8a5a30", noTex: true, noCollide: true });
+  walls.push({ pos: [-52, 1.6, -34.6], size: [1.6, 3.2, 0.3], color: "#6a4a2a", noTex: true }); // 문
+
+  // ---------- 과수원 ----------
+  for (const [tx, tz] of [[-20, 34], [-8, 40], [4, 34], [16, 40], [28, 34], [-32, 40]] as [number, number][]) {
+    propsArr.push({ kind: "cylinder", pos: [tx, 1.4, tz], radiusTop: 0.2, radiusBottom: 0.3, height: 2.8, color: "#6a4a2a", collides: true });
+    propsArr.push({ kind: "sphere", pos: [tx, 3.5, tz], radius: 1.6, color: "#3a9a4a" });
+    propsArr.push({ kind: "sphere", pos: [tx - 0.7, 3.0, tz + 0.6], radius: 0.22, color: "#e83a3a" });
+    propsArr.push({ kind: "sphere", pos: [tx + 0.7, 3.4, tz - 0.4], radius: 0.22, color: "#e83a3a" });
+    propsArr.push({ kind: "sphere", pos: [tx + 0.2, 2.7, tz - 0.7], radius: 0.22, color: "#e8842a" });
+  }
+  fenceRun(walls, -38, 28, 34, 28);
+
+  // ---------- 농가 + 헛간 소품 ----------
+  walls.push({ pos: [52, 2.1, 34], size: [16, 4.2, 0.8], tex: "barnWood", texRepeat: [5, 2] });
+  walls.push({ pos: [44.4, 2.1, 40], size: [0.8, 4.2, 12], tex: "barnWood", texRepeat: [4, 2] });
+  walls.push({ pos: [59.6, 2.1, 40], size: [0.8, 4.2, 12], tex: "barnWood", texRepeat: [4, 2] });
+  walls.push({ pos: [52, 4.4, 40], size: [17, 0.5, 13], color: "#7a3226", noTex: true, noCollide: true });
+  hayBox(walls, 48, 42, true); hayBox(walls, 56, 38);
+  // 우물
+  propsArr.push({ kind: "cylinder", pos: [20, 0.6, 8], radiusTop: 1.2, radiusBottom: 1.3, height: 1.2, color: "#9a9a92", collides: true });
+  walls.push({ pos: [20, 2.3, 8], size: [3, 0.3, 3], color: "#7a3226", noTex: true, noCollide: true });
+  // 허수아비
+  for (const [sx, sz] of [[-40, -6], [24, -8]] as [number, number][]) {
+    propsArr.push({ kind: "cylinder", pos: [sx, 1.1, sz], radiusTop: 0.07, radiusBottom: 0.09, height: 2.2, color: "#8a6240", collides: true });
+    walls.push({ pos: [sx, 1.7, sz], size: [1.8, 0.14, 0.14], color: "#8a6240", noTex: true, noCollide: true });
+    propsArr.push({ kind: "sphere", pos: [sx, 2.4, sz], radius: 0.26, color: "#e8d0a0" });
+    propsArr.push({ kind: "cylinder", pos: [sx, 2.72, sz], radiusTop: 0.02, radiusBottom: 0.42, height: 0.3, color: "#c8a04a" });
+  }
+  cratePile(walls, -62, 44); cratePile(walls, 62, -46);
+  for (const [bx, bz] of [[8, 14], [10, 15.5], [-14, -44]] as [number, number][]) {
+    propsArr.push({ kind: "cylinder", pos: [bx, 0.65, bz], radiusTop: 0.5, radiusBottom: 0.55, height: 1.3, color: "#8a5a30", collides: true });
+  }
+  floorArea(walls, 0, 0, 8, 90, "mcPath");
+
+  return {
+    name: "cropfarm",
+    displayName: "농장",
+    floorSize: [W, D],
+    floorTex: "grass",
+    floorColor: "#7ab85a",
+    wallColor: "#f0f0ec",
+    ambientColor: "#ffffff",
+    skyColor: "#9ed4f2",
+    groundColor: "#5a9a4a",
+    fogNear: 100, fogFar: 300,
+    walls, props: propsArr,
+    spawnPoints: [
+      [-62, PLAYER_EYE, -48], [ 62, PLAYER_EYE, -48],
+      [-62, PLAYER_EYE,  48], [ 36, PLAYER_EYE,  48],
+      [  0, PLAYER_EYE, -48], [  0, PLAYER_EYE,  46],
+      [-62, PLAYER_EYE,   0], [ 64, PLAYER_EYE,  10],
+      [-14, PLAYER_EYE,  14], [ 32, PLAYER_EYE, -44],
+    ],
+  };
+}
+
+// =============================================================================
+// MAP — 미술관 (marble gallery, 120 x 90) — 그림 옆에서 위장하라!
+// =============================================================================
+
+function velvetRope(walls: WallBox[], propsArr: Prop[], x1: number, z1: number, x2: number, z2: number) {
+  const n = Math.max(2, Math.round(Math.hypot(x2 - x1, z2 - z1) / 3));
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    propsArr.push({ kind: "cylinder", pos: [x1 + (x2 - x1) * t, 0.5, z1 + (z2 - z1) * t], radiusTop: 0.06, radiusBottom: 0.14, height: 1.0, color: "#c9963f", collides: true });
+  }
+  const alongX = Math.abs(x2 - x1) > Math.abs(z2 - z1);
+  walls.push({
+    pos: [(x1 + x2) / 2, 0.85, (z1 + z2) / 2],
+    size: alongX ? [Math.abs(x2 - x1), 0.08, 0.08] : [0.08, 0.08, Math.abs(z2 - z1)],
+    color: "#a02a3a", noTex: true, noCollide: true,
+  });
+}
+
+function makeMuseum(): MapDef {
+  const W = 120, D = 90, H = 8;
+  const walls: WallBox[] = [];
+  const propsArr: Prop[] = [];
+  outerWalls(walls, W, D, H, "#efe9dc");
+  ceiling(walls, W, D, H, "#f6f2e8");
+
+  wallPanel(walls, "N", D / 2, 0, 118, H - 0.4, "wallCream");
+  wallPanel(walls, "S", D / 2, 0, 118, H - 0.4, "wallCream");
+  wallPanel(walls, "W", W / 2, 0, 88, H - 0.4, "wallPurple");
+  wallPanel(walls, "E", W / 2, 0, 88, H - 0.4, "wallPurple");
+
+  // ---------- 전시 날개 벽 (그림 양면 걸림) ----------
+  partition(walls, [-20, H / 2, -12], [0.8, H, 40], undefined, "#e2d8c4"); // z -32..8
+  partition(walls, [20, H / 2, 12], [0.8, H, 40], undefined, "#e2d8c4");   // z -8..32
+  for (let i = 0; i < 4; i++) {
+    posterAt(walls, -19.4, 3.6, -28 + i * 10, 4.2, 3.2, i, "x");
+    posterAt(walls, -20.6, 3.6, -28 + i * 10, 4.2, 3.2, i + 4, "x");
+    posterAt(walls, 20.6, 3.6, -4 + i * 10, 4.2, 3.2, (i + 2) % 8, "x");
+    posterAt(walls, 19.4, 3.6, -4 + i * 10, 4.2, 3.2, (i + 6) % 8, "x");
+  }
+
+  // ---------- 외벽 그림들 ----------
+  for (let i = 0; i < 5; i++) {
+    poster(walls, "N", D / 2, -44 + i * 22, 3.8, 5, 3.8, i);
+    poster(walls, "S", D / 2, -44 + i * 22, 3.8, 5, 3.8, (i + 3) % 8);
+  }
+  poster(walls, "W", W / 2, -24, 3.8, 5, 3.8, 6);
+  poster(walls, "W", W / 2, 24, 3.8, 5, 3.8, 1);
+  poster(walls, "E", W / 2, -24, 3.8, 5, 3.8, 2);
+  poster(walls, "E", W / 2, 24, 3.8, 5, 3.8, 5);
+
+  // ---------- 중앙 대형 조각상 (계단식 받침 — 올라갈 수 있음!) ----------
+  walls.push({ pos: [0, 0.5, 0], size: [10, 1.0, 10], tex: "marble", texRepeat: [4, 1] });
+  walls.push({ pos: [0, 1.5, 0], size: [7, 1.0, 7], tex: "marble", texRepeat: [3, 1] });
+  walls.push({ pos: [0, 2.5, 0], size: [4, 1.0, 4], tex: "marble", texRepeat: [2, 1] });
+  propsArr.push({ kind: "cylinder", pos: [0, 4.2, 0], radiusTop: 0.5, radiusBottom: 0.7, height: 2.4, color: "#d8d8e0", collides: true });
+  propsArr.push({ kind: "sphere", pos: [0, 5.8, 0], radius: 0.55, color: "#d8d8e0", collides: true });
+  velvetRope(walls, propsArr, -8, -8, 8, -8);
+  velvetRope(walls, propsArr, -8, 8, 8, 8);
+
+  // ---------- 조각상 갤러리 + 벤치 + 화분 ----------
+  for (const [sx, sz] of [[-44, -30], [-44, 0], [-44, 30], [44, -30], [44, 0], [44, 30]] as [number, number][]) {
+    statue(walls, propsArr, sx, sz, sx < 0 ? "#d8d8e0" : "#c8b89a");
+  }
+  bench(walls, -32, -20, false, "#5a4632"); bench(walls, -32, 20, false, "#5a4632");
+  bench(walls, 32, -20, false, "#5a4632");  bench(walls, 32, 20, false, "#5a4632");
+  bench(walls, 0, -30, false, "#5a4632");   bench(walls, 0, 30, false, "#5a4632");
+  plant(propsArr, -54, -40, true); plant(propsArr, 54, -40, true);
+  plant(propsArr, -54, 40, true);  plant(propsArr, 54, 40, true);
+  rug(walls, 0, -22, 30, 8, "#7a2a3a");
+  rug(walls, 0, 22, 30, 8, "#2a3a7a");
+
+  // ---------- 안내 데스크 + 기념품샵 ----------
+  walls.push({ pos: [0, 0.6, -38], size: [10, 1.2, 2], color: "#5a4632", noTex: true });
+  walls.push({ pos: [0, 1.28, -38], size: [10.3, 0.12, 2.3], tex: "marble", texRepeat: [4, 1] });
+  bookshelf(walls, 50, -41.5, "S", 3.4);
+  bookshelf(walls, 56, -41.5, "S", 3.4);
+  for (let i = 0; i < 5; i++) {
+    propsArr.push({ kind: "sphere", pos: [46 + i * 3, 1.5, -36], radius: 0.28, color: ["#e83a8a", "#3ac8e8", "#f4ec3a", "#a83aff", "#3ae85c"][i] });
+  }
+
+  // ---------- 조명 ----------
+  for (const x of [-30, 0, 30]) {
+    for (const z of [-25, 0, 25]) {
+      pendant(propsArr, x, H - 1.3, z, "#fff6dc");
+    }
+  }
+  windowOn(walls, "N", D / 2, -12, 4, 3, 4.4);
+  windowOn(walls, "N", D / 2, 12, 4, 3, 4.4);
+
+  return {
+    name: "museum",
+    displayName: "미술관",
+    floorSize: [W, D],
+    floorTex: "marble",
+    floorColor: "#e8e6e2",
+    wallColor: "#efe9dc",
+    ambientColor: "#fff8ea",
+    skyColor: "#f2ead8",
+    groundColor: "#b8b0a0",
+    fogNear: 80, fogFar: 240,
+    walls, props: propsArr,
+    spawnPoints: [
+      [-54, PLAYER_EYE, -38], [ 54, PLAYER_EYE, -30],
+      [-54, PLAYER_EYE,  38], [ 38, PLAYER_EYE,  38],
+      [  0, PLAYER_EYE, -42], [  0, PLAYER_EYE,  40],
+      [-30, PLAYER_EYE,   8], [ 30, PLAYER_EYE,  -8],
+      [-10, PLAYER_EYE, -26], [ 10, PLAYER_EYE,  26],
+    ],
+  };
+}
+
 const house = makeHouse();
 const restaurant = makeRestaurant();
 const arcade = makeArcade();
 const farm = makeFarm();
 const minecraft = makeMinecraft();
+const cropfarm = makeCropFarm();
+const museum = makeMuseum();
 
-export const MAPS: Record<string, MapDef> = { house, farm, minecraft, restaurant, arcade };
-export const MAP_LIST = [house, farm, minecraft, restaurant, arcade];
+export const MAPS: Record<string, MapDef> = { house, farm, cropfarm, museum, minecraft, restaurant, arcade };
+export const MAP_LIST = [house, farm, cropfarm, museum, minecraft, restaurant, arcade];
 
 // Legacy names from older rooms — alias to the new maps
 MAPS["warehouse"] = house;

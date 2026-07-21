@@ -460,6 +460,11 @@ const PAINTERS: Record<string, Painter> = {
       ctx.fillRect(i * c, j * c, c, c * 2);
     }
   },
+  soil(ctx, s) {
+    mcNoise(ctx, s, "#6a4a2e", 12);
+    ctx.fillStyle = "rgba(30,18,8,0.55)";
+    for (let y = 0; y < s; y += s / 6) ctx.fillRect(0, y, s, s / 18);
+  },
 };
 
 // ---------- posters (art to imitate!) ----------

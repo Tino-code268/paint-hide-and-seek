@@ -143,6 +143,14 @@ function Room() {
     await supabase.from("room_players").update({ is_ready: !me.is_ready }).eq("id", me.id);
   };
 
+  // 술래 지원: 내 role을 seeker/null로 토글 (게임 시작 때 지원자 중에서 랜덤 선발)
+  const toggleVolunteer = async () => {
+    if (!me) return;
+    await supabase.from("room_players")
+      .update({ role: me.role === "seeker" ? null : "seeker" })
+      .eq("id", me.id);
+  };
+
   const leaveRoom = async () => {
     if (isHost) {
       // Host leaving -> delete room (cascade removes players)
@@ -209,9 +217,12 @@ function Room() {
                       </div>
                     </div>
                   </div>
-                  {p.is_ready
-                    ? <Badge className="bg-primary text-primary-foreground">READY</Badge>
-                    : <Badge variant="outline">대기중</Badge>}
+                  <span className="flex items-center gap-2">
+                    {p.role === "seeker" && <Badge className="bg-[#ff3860] text-white">🔫 술래지원</Badge>}
+                    {p.is_ready
+                      ? <Badge className="bg-primary text-primary-foreground">READY</Badge>
+                      : <Badge variant="outline">대기중</Badge>}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -219,6 +230,9 @@ function Room() {
             <div className="mt-6 flex flex-col md:flex-row gap-3">
               <Button variant={me?.is_ready ? "outline" : "default"} onClick={toggleReady} className="flex-1 h-12 tracking-widest">
                 {me?.is_ready ? "준비 취소" : "준비 완료"}
+              </Button>
+              <Button variant={me?.role === "seeker" ? "destructive" : "outline"} onClick={toggleVolunteer} className="flex-1 h-12 tracking-widest">
+                {me?.role === "seeker" ? "🔫 술래 지원 중 (취소)" : "🔫 술래 지원하기"}
               </Button>
               {isHost && (
                 <Button onClick={startGame} disabled={!allReady} className="flex-1 h-12 tracking-widest" variant="secondary">
@@ -296,7 +310,7 @@ function Room() {
         </Card>
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
-          최소 2명 · 게임이 시작되면 3D 화면으로 이동합니다
+          최소 2명 · 술래는 지원자 중에서 랜덤으로 뽑혀요 (지원자가 없으면 전체에서 랜덤)
         </p>
       </main>
     </div>
